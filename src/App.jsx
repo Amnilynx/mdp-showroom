@@ -31,7 +31,7 @@ import AdminImport from "./pages/admin/Import";
 import AdminReports from "./pages/admin/Reports";
 import AdminAccounts from "./pages/admin/Accounts";
 import AdminPortfolioList from "./pages/admin/PortfolioList";
-import AdminPortfolioForm from "./pages/admin/PortfolioForm";
+import AdminPortfolioForm from "./pages/admin/Portfolioform";
 
 export default function App() {
   return (
