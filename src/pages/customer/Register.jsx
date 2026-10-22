@@ -133,6 +133,13 @@ export default function Register() {
               required
             />
           </label>
+          <p className="legal-note">
+            By creating an account you agree to our{" "}
+            <Link to="/privacy" target="_blank" rel="noopener noreferrer">
+              Privacy Policy
+            </Link>
+            .
+          </p>
           {error && <p className="form-error">{error}</p>}
           <button type="submit" disabled={busy || googleBusy}>
             {busy ? "Creating account…" : "Create Account"}

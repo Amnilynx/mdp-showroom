@@ -18,11 +18,13 @@ import Portfolio from "./pages/customer/Portfolio";
 import QuoteRequest from "./pages/customer/QuoteRequest";
 import OrderTicket from "./pages/customer/OrderTicket";
 import MyOrders from "./pages/customer/MyOrders";
+import Privacy from "./pages/customer/Privacy";
 
 // Admin pages
 import AdminOverview from "./pages/admin/Overview";
 import AdminOrdersList from "./pages/admin/OrdersList";
 import AdminOrderDetail from "./pages/admin/OrderDetail";
+import AdminInquiries from "./pages/admin/Inquiries";
 import AdminShowroomList from "./pages/admin/ShowroomList";
 import AdminShowroomForm from "./pages/admin/ShowroomForm";
 import AdminCategoriesList from "./pages/admin/CategoriesList";
@@ -31,13 +33,13 @@ import AdminImport from "./pages/admin/Import";
 import AdminReports from "./pages/admin/Reports";
 import AdminAccounts from "./pages/admin/Accounts";
 import AdminPortfolioList from "./pages/admin/PortfolioList";
-import AdminPortfolioForm from "./pages/admin/Portfolioform";
+import AdminPortfolioForm from "./pages/admin/PortfolioForm";
 
 export default function App() {
   return (
     <AuthProvider>
       <CartProvider>
-        <BrowserRouter basename={import.meta.env.BASE_URL.replace(/\/$/, '')}>
+        <BrowserRouter>
         <Routes>
           {/* Customer — public */}
           <Route path="/" element={<Homepage />} />
@@ -47,6 +49,7 @@ export default function App() {
           <Route path="/register" element={<Register />} />
           <Route path="/showroom" element={<ShowroomChooseType />} />
           <Route path="/portfolio" element={<Portfolio />} />
+          <Route path="/privacy" element={<Privacy />} />
           <Route path="/showroom/:categoryId" element={<ShowroomBrowseList />} />
           <Route
             path="/showroom/:categoryId/:furnitureId/customize"
@@ -101,6 +104,14 @@ export default function App() {
             element={
               <ProtectedRoute role="manager">
                 <AdminOrderDetail />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/inquiries"
+            element={
+              <ProtectedRoute role="manager">
+                <AdminInquiries />
               </ProtectedRoute>
             }
           />

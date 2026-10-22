@@ -2,10 +2,14 @@ import { Link, useNavigate, useLocation } from "react-router-dom";
 import { signOut } from "firebase/auth";
 import { auth } from "../lib/firebase";
 import { useAuth } from "../context/AuthContext";
+import { useUnreadInquiries } from "../lib/chatPresence";
+
+const LOGO_URL = "https://raw.githubusercontent.com/Amnilynx/mdp-showroom-media/main/branding/mdp-logo.png";
 
 const NAV_ITEMS = [
   { label: "Dashboard", to: "/admin", icon: "☰" },
   { label: "Orders", to: "/admin/orders", icon: "📋" },
+  { label: "Inquiries", to: "/admin/inquiries", icon: "💬" },
   { label: "Showroom", to: "/admin/showroom", icon: "🗄" },
   { label: "Categories", to: "/admin/categories", icon: "🏷" },
   { label: "Our Work", to: "/admin/portfolio", icon: "🖼" },
@@ -16,6 +20,7 @@ const NAV_ITEMS = [
 
 export default function AdminLayout({ title, children }) {
   const { profile } = useAuth();
+  const inquiriesUnread = useUnreadInquiries();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -27,14 +32,9 @@ export default function AdminLayout({ title, children }) {
   return (
     <div className="admin-shell">
       <header className="admin-topbar">
-        <div className="admin-topbar-brand">
-          <span className="navbar-logo">MDP</span>
-          <span className="navbar-brand-text">
-            MDP MODULAR
-            <br />
-            <span className="navbar-brand-accent">SYSTEMS</span>
-          </span>
-        </div>
+        <Link to="/admin" className="admin-topbar-brand">
+          <img src={LOGO_URL} alt="MDP Modular Systems" className="navbar-logo-img" />
+        </Link>
         <input className="admin-search" placeholder="Search" />
         <span className="admin-title">ADMIN</span>
         <button className="admin-signout" onClick={handleSignOut}>
@@ -57,10 +57,17 @@ export default function AdminLayout({ title, children }) {
                 <Link
                   key={item.to}
                   to={item.to}
-                  className={"admin-nav-item" + (active ? " admin-nav-active" : "")}
+                  className={
+                    "admin-nav-item" +
+                    (active ? " admin-nav-active" : "") +
+                    (item.to === "/admin/inquiries" && inquiriesUnread > 0 ? " admin-nav-alert" : "")
+                  }
                 >
                   <span className="admin-nav-icon">{item.icon}</span>
                   <span className="admin-nav-label">{item.label}</span>
+                  {item.to === "/admin/inquiries" && inquiriesUnread > 0 && (
+                    <span className="tab-unread-badge">{inquiriesUnread} NEW</span>
+                  )}
                 </Link>
               );
             })}

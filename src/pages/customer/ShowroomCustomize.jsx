@@ -37,6 +37,7 @@ export default function ShowroomCustomize() {
   const [customPart, setCustomPart] = useState("");
   const [customNote, setCustomNote] = useState("");
   const [added, setAdded] = useState(false);
+  const [swatchImageFailed, setSwatchImageFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -87,6 +88,12 @@ export default function ShowroomCustomize() {
   // notes — it's shown as a labeled color swatch (see .finish-swatch
   // below) rather than pretending to change the product photo.
   const displayImageUrl = furniture?.imageUrl;
+
+  // Reset the broken-image fallback whenever the selected finish changes,
+  // so switching finishes always gets a fresh attempt to load its photo.
+  useEffect(() => {
+    setSwatchImageFailed(false);
+  }, [selectedFinish?.swatchImageUrl]);
 
   function handleUseStandardToggle(checked) {
     setUseStandardDims(checked);
@@ -221,9 +228,30 @@ export default function ShowroomCustomize() {
             {/* Finish — shown as a color swatch rather than a photo swap.
                 We don't have real photos of the same physical piece in
                 multiple finishes, so swatches represent the finish
-                honestly without implying the hero photo will change. */}
+                honestly without implying the hero photo will change.
+                When a finish has a real supplier reference photo
+                (swatchImageUrl), it's shown above the picker so the
+                customer can see the genuine material before choosing. */}
             <div className="customize-section">
               <h4>Choose a finish</h4>
+              {selectedFinish?.swatchImageUrl && (
+                <div className="finish-reference-swatch">
+                  {swatchImageFailed ? (
+                    <div className="finish-reference-unavailable">
+                      Reference photo unavailable right now
+                    </div>
+                  ) : (
+                    <img
+                      src={selectedFinish.swatchImageUrl}
+                      alt={`${selectedFinish.name} material reference`}
+                      onError={() => setSwatchImageFailed(true)}
+                    />
+                  )}
+                  <span className="finish-reference-caption">
+                    Real material reference — actual piece may vary slightly in lighting.
+                  </span>
+                </div>
+              )}
               <div className="finish-swatch-row">
                 {(furniture.finishOptions || []).map((finish) => (
                   <button

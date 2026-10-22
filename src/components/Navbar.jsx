@@ -3,6 +3,8 @@ import { signOut } from "firebase/auth";
 import { auth } from "../lib/firebase";
 import { useAuth } from "../context/AuthContext";
 
+const LOGO_URL = "https://raw.githubusercontent.com/Amnilynx/mdp-showroom-media/main/branding/mdp-logo.png";
+
 export default function Navbar() {
   const { user, profile, loading } = useAuth();
   const navigate = useNavigate();
@@ -15,12 +17,7 @@ export default function Navbar() {
   return (
     <header className="navbar">
       <Link to="/" className="navbar-brand">
-        <span className="navbar-logo">MDP</span>
-        <span className="navbar-brand-text">
-          MDP MODULAR
-          <br />
-          <span className="navbar-brand-accent">SYSTEMS</span>
-        </span>
+        <img src={LOGO_URL} alt="MDP Modular Systems" className="navbar-logo-img" />
       </Link>
 
       <nav className="navbar-links">

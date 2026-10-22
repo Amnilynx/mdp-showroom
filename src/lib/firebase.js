@@ -19,6 +19,13 @@ const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
 export const googleProvider = new GoogleAuthProvider();
+
+// Always show Google's account chooser. Without this, a browser that is
+// signed in to exactly one Google account skips the chooser and signs that
+// account in straight away — the person never gets to pick (or add) a
+// different account. "select_account" forces the chooser every time.
+googleProvider.setCustomParameters({ prompt: "select_account" });
+
 export default app;
 
 // Used for admin-creates-admin: a SEPARATE, temporary Firebase app instance

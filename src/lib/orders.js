@@ -11,6 +11,7 @@ import {
   updateDoc,
   serverTimestamp,
   arrayUnion,
+  Timestamp,
 } from "firebase/firestore";
 import { sendSystemMessage } from "./messages";
 
@@ -22,20 +23,81 @@ const COLLECTION = "orders";
 // constant if that doc doesn't exist yet or fails to load.
 export const HARDWARE_INSTALLATION_RATE = 0.10;
 
-// Where to send manual payments. Plain constants for now — move to a
-// Settings doc in Firestore later if this needs to be admin-editable.
+// Where to send manual payments. MDP takes payments by bank deposit only
+// (confirmed in Interviews 1 and 2), so the bank is the one and only method.
+// Plain constants for now — move to a Settings doc in Firestore later if
+// this needs to be admin-editable.
 export const PAYMENT_METHODS = {
-  gcash: {
-    label: "GCash",
-    name: "MDP Modular Systems",
-    number: "0917-000-0000", // TODO: replace with real GCash number
-  },
   bank: {
-    label: "Bank Transfer (BDO)",
+    label: "Bank Deposit (BDO)",
     name: "MDP Modular Systems",
     accountNumber: "0000-0000-0000", // TODO: replace with real account number
   },
 };
+
+export const DEFAULT_PAYMENT_METHOD = "bank";
+
+// Orders paid before GCash was removed still say "gcash" — show them
+// honestly instead of printing the raw key.
+export function paymentMethodLabel(key) {
+  if (PAYMENT_METHODS[key]) return PAYMENT_METHODS[key].label;
+  if (key === "gcash") return "GCash (earlier order)";
+  return key || "";
+}
+
+// ---------- Deposit window ----------
+// The owners give a client two weeks after the quotation is agreed (the
+// contract is signed) to pay the downpayment. No materials are bought and no
+// work starts until it is paid. The clock starts when the customer presses
+// "Accept Quotation"; MDP can extend it, or close the order if it lapses.
+export const DEPOSIT_WINDOW_DAYS = 14;
+export const DEPOSIT_EXTENSION_DAYS = 7;
+export const DEPOSIT_WARN_DAYS = 3; // banner turns amber at this many days left
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function toMillis(v) {
+  if (!v) return null;
+  if (typeof v.toMillis === "function") return v.toMillis();
+  if (typeof v.toDate === "function") return v.toDate().getTime();
+  if (typeof v === "number") return v;
+  const t = new Date(v).getTime();
+  return Number.isNaN(t) ? null : t;
+}
+
+export function getDepositDueMillis(order) {
+  return toMillis(order?.depositDueDate);
+}
+
+export function getQuoteAcceptedMillis(order) {
+  return toMillis(order?.quoteAcceptedAt);
+}
+
+// Whole days left (rounded up). Negative once overdue; null if no window yet.
+export function getDepositDaysLeft(order, now = Date.now()) {
+  const due = getDepositDueMillis(order);
+  if (due == null) return null;
+  return Math.ceil((due - now) / DAY_MS);
+}
+
+// Where the order is in the deposit step:
+//   "waiting_price"  – MDP has not issued a final price yet
+//   "needs_accept"   – price issued, customer has not accepted it
+//   "window_open"    – accepted, inside the 2-week window
+//   "overdue"        – accepted, window passed, nothing paid
+//   "submitted"      – customer submitted payment, MDP verifying
+//   "paid"           – deposit verified by MDP
+//   "closed"         – cancelled or rejected
+export function getDepositStage(order, now = Date.now()) {
+  if (!order) return "waiting_price";
+  if (order.status === "cancelled" || order.status === "rejected") return "closed";
+  if (order.depositConfirmed) return "paid";
+  if (order.paymentReference) return "submitted";
+  if (!order.finalPrice) return "waiting_price";
+  if (!order.quoteAcceptedAt) return "needs_accept";
+  const left = getDepositDaysLeft(order, now);
+  if (left != null && getDepositDueMillis(order) < now) return "overdue";
+  return "window_open";
+}
 
 // Single source of truth for the status lifecycle (see architecture-plan.md)
 export const ORDER_STATUSES = [
@@ -49,6 +111,26 @@ export const ORDER_STATUSES = [
 ];
 
 export const TERMINAL_STATUSES = ["rejected", "cancelled"];
+
+// Order types. "catalog" = built from the showroom (50% deposit).
+// "pure_custom" = a from-scratch commission for a company, priced by MDP
+// after review (30% deposit). depositRate is stored on the order when it is
+// created so the rule never changes retroactively.
+export const DEPOSIT_RATE_STANDARD = 0.5;
+export const DEPOSIT_RATE_COMPANY = 0.3;
+
+export function isPureCustom(order) {
+  return order?.orderType === "pure_custom";
+}
+
+export function getDepositRate(order) {
+  const r = Number(order?.depositRate);
+  return r > 0 && r < 1 ? r : DEPOSIT_RATE_STANDARD;
+}
+
+export function depositPercentLabel(order) {
+  return Math.round(getDepositRate(order) * 100) + "%";
+}
 
 // Once an order reaches one of these, materials have been bought and/or
 // fabrication has started. Change requests from here on can only touch
@@ -137,6 +219,7 @@ export async function updateOrderStatus(orderId, newStatus) {
   const ref = doc(db, COLLECTION, orderId);
   await updateDoc(ref, {
     status: newStatus,
+    statusBeforeChange: null, // a manual status change ends any pending "go back to" from a change request
     updatedAt: serverTimestamp(),
   });
 
@@ -168,20 +251,45 @@ export async function assignOrderCode(orderId, orderCode) {
 // binding price the customer will actually pay a deposit against.
 // This is what turns an auto-calculated estimate into a confirmed quote,
 // and is the action behind the "Est. Price Issued" status.
+//
+// If the customer has ALREADY submitted their deposit (e.g. the order was
+// bounced back to Under Review by a change request and the price is being
+// re-issued), the status must not slide back to "Est. Price Issued" — the
+// payment is in, so the order goes to (or stays at) Approved or later.
 export async function issueFinalPrice(orderId, finalPrice) {
   const ref = doc(db, COLLECTION, orderId);
-  const finalDepositAmount = Math.round(finalPrice * 0.5);
+  const snap = await getDoc(ref);
+  const current = snap.exists() ? snap.data() : {};
+  const alreadyPaid = Boolean(current.paymentReference);
+  const finalDepositAmount = Math.round(finalPrice * getDepositRate(current));
+
+  let nextStatus = "est_price_issued";
+  if (alreadyPaid) {
+    nextStatus = ["request_received", "under_review", "est_price_issued"].includes(current.status)
+      ? "approved"
+      : current.status;
+  }
+
+  // A different price before any payment means the customer must agree to
+  // the NEW price: clear the acceptance so the two-week clock restarts when
+  // they accept it.
+  const priceChanged = !alreadyPaid && current.finalPrice != null && current.finalPrice !== finalPrice;
+
   await updateDoc(ref, {
     finalPrice,
     finalDepositAmount,
-    status: "est_price_issued",
+    status: nextStatus,
+    statusBeforeChange: null,
+    ...(priceChanged ? { quoteAcceptedAt: null, depositDueDate: null } : {}),
     updatedAt: serverTimestamp(),
   });
 
   try {
     await sendSystemMessage(
       orderId,
-      `Your final price has been issued: ₱${finalPrice.toLocaleString()} (deposit due: ₱${finalDepositAmount.toLocaleString()}). You can now approve and pay the deposit from your order page.`
+      alreadyPaid
+        ? `Your price has been updated to ₱${finalPrice.toLocaleString()}. Your deposit has already been received, so there's nothing more to pay right now.`
+        : `Your final price has been issued: ₱${finalPrice.toLocaleString()} (deposit due: ₱${finalDepositAmount.toLocaleString()}). Please accept the quotation on your order page; you then have ${DEPOSIT_WINDOW_DAYS} days to pay the deposit.`
     );
   } catch (err) {
     console.error("Failed to post price-issued system message:", err);
@@ -190,29 +298,124 @@ export async function issueFinalPrice(orderId, finalPrice) {
 
 // --- Customer actions ---
 
-// Customer submits proof of a manual GCash/bank transfer: the reference
-// number from their receipt, plus a compressed screenshot (base64 data URL,
-// resized/re-encoded client-side in OrderTicket.jsx to stay well under
-// Firestore's 1 MiB document limit). This is evidence for the admin to
-// check against their actual GCash/bank account, NOT an automatic
-// confirmation — depositConfirmed stays false until an admin verifies it
-// in OrderDetail.jsx. Only valid once admin has issued a final price
-// (status: est_price_issued), since the customer is paying against the
-// CONFIRMED price, not the system's provisional guess.
+// Customer submits proof of a bank deposit: the method and
+// reference number. The screenshots themselves are saved as a receipt
+// (lib/receipts.js, orders/{id}/receipts) just before this is called.
+// This is evidence for the admin to check against their actual bank
+// bank account, NOT an automatic confirmation — depositConfirmed stays false
+// until an admin verifies it in OrderDetail.jsx. Only valid once admin has
+// issued a final price (status: est_price_issued), since the customer is
+// paying against the CONFIRMED price, not the system's provisional guess.
 export async function customerSubmitPayment(
   orderId,
-  { paymentMethod, paymentReference, paymentProofImage }
+  { paymentMethod = DEFAULT_PAYMENT_METHOD, paymentReference, paymentProofImage = "" }
 ) {
   const ref = doc(db, COLLECTION, orderId);
+  const snap = await getDoc(ref);
+  if (snap.exists() && !snap.data().quoteAcceptedAt && !snap.data().paymentReference) {
+    throw new Error("Please accept the quotation first, then pay the deposit.");
+  }
   await updateDoc(ref, {
     status: "approved",
+    statusBeforeChange: null,
     depositConfirmed: false, // customer submitted proof — admin still needs to verify
     paymentMethod,
     paymentReference,
-    paymentProofImage, // base64 data URL string
+    paymentProofImage, // legacy single-image field; new payments leave it empty
     paymentSubmittedAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
+}
+
+// Customer agrees to the final quotation. This starts the two-week window to
+// pay the downpayment. It does not move the order status — "Approved" still
+// means the deposit has been submitted. Only valid once MDP has issued a
+// final price, and only once.
+export async function customerAcceptQuote(orderId) {
+  const ref = doc(db, COLLECTION, orderId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) throw new Error("Order not found.");
+  const current = snap.data();
+  if (!current.finalPrice) {
+    throw new Error("MDP hasn't issued the final price yet.");
+  }
+  if (current.quoteAcceptedAt) return; // already accepted — keep the original clock
+  const due = Timestamp.fromMillis(Date.now() + DEPOSIT_WINDOW_DAYS * DAY_MS);
+  await updateDoc(ref, {
+    quoteAcceptedAt: serverTimestamp(),
+    depositDueDate: due,
+    updatedAt: serverTimestamp(),
+  });
+
+  try {
+    await sendSystemMessage(
+      orderId,
+      `You accepted the quotation. Your downpayment is due within ${DEPOSIT_WINDOW_DAYS} days, by ${due
+        .toDate()
+        .toLocaleDateString("en-PH", { year: "numeric", month: "long", day: "numeric" })}. We only buy materials and start work once it is paid.`
+    );
+  } catch (err) {
+    console.error("Failed to post quote-accepted system message:", err);
+  }
+}
+
+// Admin gives the client more time. The new deadline counts from the later
+// of "now" and the current deadline, so an extension never shortens it.
+export async function adminExtendDeposit(orderId, days = DEPOSIT_EXTENSION_DAYS) {
+  const ref = doc(db, COLLECTION, orderId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) throw new Error("Order not found.");
+  const current = snap.data();
+  if (current.paymentReference) {
+    throw new Error("The customer has already submitted payment for this order.");
+  }
+  const base = Math.max(Date.now(), getDepositDueMillis(current) || 0);
+  const due = Timestamp.fromMillis(base + days * DAY_MS);
+  await updateDoc(ref, {
+    // If MDP extends before the customer ever accepted, start the window too.
+    quoteAcceptedAt: current.quoteAcceptedAt || serverTimestamp(),
+    depositDueDate: due,
+    depositExtensions: (current.depositExtensions || 0) + 1,
+    updatedAt: serverTimestamp(),
+  });
+
+  try {
+    await sendSystemMessage(
+      orderId,
+      `We've extended your downpayment deadline to ${due
+        .toDate()
+        .toLocaleDateString("en-PH", { year: "numeric", month: "long", day: "numeric" })}.`
+    );
+  } catch (err) {
+    console.error("Failed to post deposit-extended system message:", err);
+  }
+}
+
+// Admin closes an order whose deposit window lapsed. Only before any payment
+// has been submitted — nothing to refund, no materials bought.
+export async function adminCloseUnpaidOrder(orderId) {
+  const ref = doc(db, COLLECTION, orderId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) throw new Error("Order not found.");
+  const current = snap.data();
+  if (current.paymentReference || current.depositConfirmed) {
+    throw new Error("A payment has already been submitted for this order, so it can't be closed this way.");
+  }
+  await updateDoc(ref, {
+    status: "cancelled",
+    cancelReason: "deposit_not_paid",
+    statusBeforeChange: null,
+    updatedAt: serverTimestamp(),
+  });
+
+  try {
+    await sendSystemMessage(
+      orderId,
+      "This order was closed because the downpayment wasn't received within the agreed time. You're welcome to send a new request or message us if you'd like to reopen it."
+    );
+  } catch (err) {
+    console.error("Failed to post order-closed system message:", err);
+  }
 }
 
 // Only cancellable before a deposit is submitted — once approved (or
@@ -359,13 +562,41 @@ export async function addAdminNote(orderId, authorId, note) {
 //
 // Submitting a request while the order is still pre-production (materials
 // not yet bought) bounces the main order status back to "under_review", so
-// the admin re-evaluates it the same way they would a fresh quote. Once the
-// order is past that point (in_production or later), the status does NOT
-// bounce back — production is already committed — but the request is still
-// tracked and quoted the same way, and can ONLY be a finish/hardware-level
-// change, never a dimension change (enforced below).
+// the admin re-evaluates it the same way they would a fresh quote. The
+// status it came from is remembered in `statusBeforeChange`, and once the
+// LAST open request is resolved (accepted, declined by either side) the
+// order returns to that status — so it doesn't stay stuck on "Under
+// Review" after the change is settled. Once the order is past that point
+// (in_production or later), the status does NOT bounce back — production
+// is already committed — but the request is still tracked and quoted the
+// same way, and can ONLY be a finish/hardware-level change, never a
+// dimension change (enforced below).
 
-export async function addChangeRequest(orderId, customerId, note) {
+// After a request is resolved: if nothing is left open and the order was
+// parked on Under Review by a change request, put it back.
+function statusRestoreUpdate(order, changeRequests) {
+  const stillOpen = changeRequests.some((cr) => cr.status === "pending" || cr.status === "quoted");
+  if (stillOpen) return null;
+  if (order.status !== "under_review" || !order.statusBeforeChange) return null;
+  return { status: order.statusBeforeChange, statusBeforeChange: null };
+}
+
+async function postRestoreMessage(orderId, restore) {
+  if (!restore) return;
+  try {
+    await sendSystemMessage(
+      orderId,
+      `Your order status returned to "${STATUS_LABELS[restore.status] || restore.status}".`
+    );
+  } catch (err) {
+    console.error("Failed to post status-restored system message:", err);
+  }
+}
+
+// `notice` is the customer's letter of notice (required by the UI): the
+// chat message it was sent in and that message's attachment metadata, so
+// the request can link to the files (the files themselves live in the chat).
+export async function addChangeRequest(orderId, customerId, note, { notice = null } = {}) {
   const order = await getOrderById(orderId);
   if (!order) throw new Error("Order not found.");
   if (TERMINAL_STATUSES.includes(order.status)) {
@@ -381,6 +612,14 @@ export async function addChangeRequest(orderId, customerId, note) {
     adjustmentAmount: null,
     adminResponse: "",
     proof: null,
+    notice: notice
+      ? {
+          messageId: notice.messageId,
+          attachments: notice.attachments,
+          sentAt: new Date().toISOString(),
+        }
+      : null,
+    files: [], // extra files either side adds later (see attachChangeRequestFiles)
     createdAt: new Date().toISOString(),
     resolvedAt: null,
   };
@@ -402,6 +641,7 @@ export async function addChangeRequest(orderId, customerId, note) {
 
   if (!isPostProduction && order.status !== "under_review" && order.status !== "request_received") {
     updates.status = "under_review";
+    updates.statusBeforeChange = order.status; // remembered so it can go back
   }
 
   await updateDoc(ref, updates);
@@ -467,11 +707,13 @@ export async function acceptChangeRequest(orderId, changeRequestId) {
       : cr
   );
   const newAdjustmentsTotal = (order.adjustmentsTotal || 0) + target.adjustmentAmount;
+  const restore = statusRestoreUpdate(order, changeRequests);
 
   const ref = doc(db, COLLECTION, orderId);
   await updateDoc(ref, {
     changeRequests,
     adjustmentsTotal: newAdjustmentsTotal,
+    ...(restore || {}),
     updatedAt: serverTimestamp(),
   });
 
@@ -480,6 +722,7 @@ export async function acceptChangeRequest(orderId, changeRequestId) {
   } catch (err) {
     console.error("Failed to post change-accepted system message:", err);
   }
+  await postRestoreMessage(orderId, restore);
 }
 
 // Customer rejects a quoted change — order simply continues as the last
@@ -494,15 +737,17 @@ export async function rejectChangeRequest(orderId, changeRequestId) {
       ? { ...cr, status: "rejected", resolvedAt: new Date().toISOString() }
       : cr
   );
+  const restore = statusRestoreUpdate(order, changeRequests);
 
   const ref = doc(db, COLLECTION, orderId);
-  await updateDoc(ref, { changeRequests, updatedAt: serverTimestamp() });
+  await updateDoc(ref, { changeRequests, ...(restore || {}), updatedAt: serverTimestamp() });
 
   try {
     await sendSystemMessage(orderId, "You declined the proposed change. Your order continues as currently configured.");
   } catch (err) {
     console.error("Failed to post change-rejected system message:", err);
   }
+  await postRestoreMessage(orderId, restore);
 }
 
 // Admin declines a request outright (e.g. a post-production DIMENSION
@@ -516,21 +761,22 @@ export async function adminDeclineChangeRequest(orderId, changeRequestId, adminR
       ? { ...cr, status: "declined_by_admin", adminResponse: adminResponse || "", resolvedAt: new Date().toISOString() }
       : cr
   );
+  const restore = statusRestoreUpdate(order, changeRequests);
 
   const ref = doc(db, COLLECTION, orderId);
-  await updateDoc(ref, { changeRequests, updatedAt: serverTimestamp() });
+  await updateDoc(ref, { changeRequests, ...(restore || {}), updatedAt: serverTimestamp() });
 
   try {
     await sendSystemMessage(orderId, "We're unable to accommodate the requested change. See details in your order.");
   } catch (err) {
     console.error("Failed to post change-declined system message:", err);
   }
+  await postRestoreMessage(orderId, restore);
 }
 
-// Admin attaches proof (screenshot + reference number) to an already-
-// resolved request — used for deductions/refunds so the customer can see
-// evidence it was actually processed, mirroring the customer's own
-// payment-proof flow but in reverse (business -> customer).
+// Legacy: admin proof attached to a change request. New proof goes in the
+// order's Receipts (lib/receipts.js); this is kept so nothing that still
+// imports it breaks, and old proofs stored this way still display.
 export async function attachChangeRequestProof(orderId, changeRequestId, { referenceNumber, screenshotBase64, note }) {
   const order = await getOrderById(orderId);
   if (!order) throw new Error("Order not found.");
@@ -551,10 +797,28 @@ export async function attachChangeRequestProof(orderId, changeRequestId, { refer
 
   const ref = doc(db, COLLECTION, orderId);
   await updateDoc(ref, { changeRequests, updatedAt: serverTimestamp() });
+}
 
-  try {
-    await sendSystemMessage(orderId, "Proof of a refund/deduction was attached to your change request. Check your order for details.");
-  } catch (err) {
-    console.error("Failed to post proof-attached system message:", err);
-  }
+// Either side adds files to an existing change request. The files
+// themselves were already sent as a chat message (lib/messages.js
+// sendMessage); this links that message to the request so the files show
+// on the request itself too.
+export async function attachChangeRequestFiles(orderId, changeRequestId, { messageId, attachments, by, byName }) {
+  const order = await getOrderById(orderId);
+  if (!order) throw new Error("Order not found.");
+
+  const changeRequests = (order.changeRequests || []).map((cr) =>
+    cr.id === changeRequestId
+      ? {
+          ...cr,
+          files: [
+            ...(cr.files || []),
+            { messageId, attachments, by, byName: byName || "", uploadedAt: new Date().toISOString() },
+          ],
+        }
+      : cr
+  );
+
+  const ref = doc(db, COLLECTION, orderId);
+  await updateDoc(ref, { changeRequests, updatedAt: serverTimestamp() });
 }

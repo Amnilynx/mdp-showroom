@@ -10,10 +10,10 @@
 
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
-import { getPayableTotal, STATUS_LABELS, PAYMENT_METHODS } from "./orders";
+import { getPayableTotal, STATUS_LABELS, paymentMethodLabel, depositPercentLabel, isPureCustom } from "./orders";
 
 // TODO: replace with the real business address/phone once available —
-// same placeholder pattern as the GCash/bank numbers in orders.js.
+// same placeholder pattern as the bank account number in orders.js.
 const BUSINESS_NAME = "MDP Modular Systems";
 const BUSINESS_SUBTITLE = "Custom Modular Furniture";
 
@@ -79,6 +79,7 @@ export function generateOrderReceipt(order) {
   ].filter(Boolean);
   const rightLines = [
     `Status: ${STATUS_LABELS[order.status] || order.status}`,
+    isPureCustom(order) ? "Type: Pure custom (company)" : null,
     `Date ordered: ${formatDate(order.createdAt)}`,
     order.confirmedVisitDate ? `Site visit: ${order.confirmedVisitDate}` : null,
     order.scheduledDeliveryDate ? `Delivery: ${order.scheduledDeliveryDate}` : null,
@@ -90,7 +91,9 @@ export function generateOrderReceipt(order) {
   y = colStartY + Math.max(leftLines.length, rightLines.length) * 14 + 20;
 
   // ---------- Line items ----------
-  const rows = (order.configurations || []).map((c) => [
+  const rows = isPureCustom(order)
+    ? [["Pure custom commission", (order.projectDetails || "As discussed").slice(0, 120), order.finalPrice ? peso(order.finalPrice) : "To be quoted"]]
+    : (order.configurations || []).map((c) => [
     `${c.furnitureName}${c.shapeType ? ` — ${c.shapeType}` : ""}`,
     [c.finish, c.hardware].filter(Boolean).join(" · ") || "—",
     peso(c.subtotal),
@@ -135,7 +138,9 @@ export function generateOrderReceipt(order) {
   const depositAmount = order.finalDepositAmount ?? order.depositAmount ?? 0;
   if (depositAmount) {
     totalRows.push([
-      order.depositConfirmed ? "Deposit Paid & Verified (50%)" : "Deposit Due (50%)",
+      order.depositConfirmed
+        ? `Deposit Paid & Verified (${depositPercentLabel(order)})`
+        : `Deposit Due (${depositPercentLabel(order)})`,
       peso(depositAmount),
     ]);
   }
@@ -168,7 +173,7 @@ export function generateOrderReceipt(order) {
     y += 14;
     doc.setFont("helvetica", "normal");
     doc.text(
-      `${PAYMENT_METHODS[order.paymentMethod]?.label || order.paymentMethod} · Ref: ${order.paymentReference}`,
+      `${paymentMethodLabel(order.paymentMethod)} · Ref: ${order.paymentReference}`,
       marginX,
       y
     );

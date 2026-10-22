@@ -7,11 +7,66 @@ import {
   createFurniture,
   updateFurniture,
 } from "../../lib/furniture";
+import { NEWMIKA_SWATCHES, NEWMIKA_SITE_URL } from "../../lib/newmikaSwatches";
 
 const SHAPE_CHOICES = ["Straight", "L-Shape", "U-Shape", "Island"];
 
 const emptyOption = () => ({ name: "", price: "", imageUrl: "" });
-const emptyFinishOption = () => ({ name: "", price: "", colorHex: "#d8d2c4" });
+const emptyFinishOption = () => ({
+  name: "",
+  price: "",
+  colorHex: "#d8d2c4",
+  swatchImageUrl: "",
+});
+
+// Inline styles for the NewMika picker so no stylesheet change is needed.
+const pickerStyles = {
+  toggle: {
+    alignSelf: "flex-start",
+    background: "none",
+    border: "1px solid #c8963e",
+    color: "#c8963e",
+    borderRadius: 4,
+    padding: "6px 12px",
+    fontSize: 12,
+    fontWeight: 700,
+    cursor: "pointer",
+  },
+  panel: {
+    border: "1px solid #e9e0cf",
+    borderRadius: 8,
+    padding: 12,
+    background: "#fdfaf3",
+  },
+  grid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fill, minmax(104px, 1fr))",
+    gap: 10,
+  },
+  card: (active) => ({
+    background: "#fff",
+    border: active ? "2px solid #c8963e" : "1px solid #e9e0cf",
+    borderRadius: 8,
+    padding: 6,
+    cursor: "pointer",
+    textAlign: "left",
+    display: "flex",
+    flexDirection: "column",
+    gap: 4,
+    fontFamily: "inherit",
+  }),
+  thumb: {
+    width: "100%",
+    aspectRatio: "1 / 1",
+    objectFit: "cover",
+    borderRadius: 5,
+    background: "#e9e0cf",
+    display: "block",
+  },
+  name: { fontSize: 11, fontWeight: 700, color: "#2b2b2b", lineHeight: 1.2 },
+  code: { fontSize: 10, color: "#6b6b6b" },
+  footer: { marginTop: 10, fontSize: 11, color: "#6b6b6b" },
+};
 
 export default function AdminShowroomForm() {
   const { furnitureId } = useParams();
@@ -33,13 +88,18 @@ export default function AdminShowroomForm() {
 
   // sizeOptions: [{ type: "Straight", price }]
   const [sizeOptions, setSizeOptions] = useState([{ type: "Straight", price: "" }]);
-  // finishOptions: [{ name, price, colorHex }] — colorHex drives the small
-  // swatch shown in the showroom's finish picker. We don't have real
-  // photos of the same physical piece in multiple finishes, so finish
-  // selection intentionally does NOT change the product photo — see
-  // ShowroomCustomize.jsx for why.
+  // finishOptions: [{ name, price, colorHex, swatchImageUrl }] — colorHex
+  // drives the small swatch tile shown in the showroom's finish picker.
+  // swatchImageUrl (optional) is a real supplier reference photo of the
+  // actual material (e.g. a NewMika/Mikasa Laminates decor photo),
+  // shown above the picker so customers see the genuine finish. Staff can
+  // pick one from the built-in NewMika library (lib/newmikaSwatches.js) or
+  // paste any image URL. We don't have real photos of THIS physical piece
+  // in multiple finishes, so finish selection intentionally does NOT change
+  // the product's own hero photo — see ShowroomCustomize.jsx for why.
   // hardwareOptions: [{ name, price }] — hardware doesn't change the photo.
   const [finishOptions, setFinishOptions] = useState([emptyFinishOption()]);
+  const [openPickerFor, setOpenPickerFor] = useState(null); // finish row index showing the NewMika library
   const [hardwareOptions, setHardwareOptions] = useState([emptyOption()]);
   const [defaultW, setDefaultW] = useState("");
   const [defaultD, setDefaultD] = useState("");
@@ -79,6 +139,7 @@ export default function AdminShowroomForm() {
                 name: f.name,
                 price: f.priceAddOn,
                 colorHex: f.colorHex || "#d8d2c4",
+                swatchImageUrl: f.swatchImageUrl || "",
               }))
             : [emptyFinishOption()]
         );
@@ -113,6 +174,22 @@ export default function AdminShowroomForm() {
 
   function removeListItem(list, setList, index) {
     setList(list.filter((_, i) => i !== index));
+  }
+
+  // Fill a finish row from a NewMika library swatch. The finish name is only
+  // overwritten when the admin hasn't typed one yet, so they can keep their
+  // own wording (e.g. "Wood Veneer") while still attaching the real photo.
+  function applyNewmikaSwatch(index, swatch) {
+    const next = [...finishOptions];
+    const current = next[index];
+    next[index] = {
+      ...current,
+      name: current.name?.trim() ? current.name : swatch.name,
+      colorHex: swatch.colorHex,
+      swatchImageUrl: swatch.imageUrl,
+    };
+    setFinishOptions(next);
+    setOpenPickerFor(null);
   }
 
   async function handleSubmit(e) {
@@ -150,6 +227,7 @@ export default function AdminShowroomForm() {
             name: f.name,
             priceAddOn: Number(f.price) || 0,
             colorHex: f.colorHex || "#d8d2c4",
+            swatchImageUrl: f.swatchImageUrl?.trim() || "",
           })),
         hardwareOptions: hardwareOptions
           .filter((h) => h.name)
@@ -290,18 +368,20 @@ export default function AdminShowroomForm() {
           </button>
         </fieldset>
 
-        {/* Finish options — each gets a color swatch (not a photo). We
-            don't have real photos of the same physical piece in multiple
-            finishes, so the showroom shows finish as a labeled swatch
-            rather than swapping the product photo. See
-            ShowroomCustomize.jsx for the customer-facing picker. */}
+        {/* Finish options — each gets a color swatch (always) plus an
+            optional real supplier reference photo (swatchImageUrl). Use
+            "Pick from NewMika library" to attach a genuine NewMika/Mikasa
+            laminate swatch in one click, or paste any image URL. The
+            showroom shows finish as a labeled swatch rather than swapping
+            the product photo, since we don't have real photos of THIS
+            piece in multiple finishes. See ShowroomCustomize.jsx. */}
         <fieldset className="admin-fieldset">
           <legend>Finish / Material options &amp; add-on price</legend>
           {finishOptions.map((opt, i) => (
             <div className="option-row option-row-with-image" key={i}>
               <div className="option-row-fields">
                 <input
-                  placeholder="Finish name (e.g. Dark Walnut)"
+                  placeholder="Finish name (e.g. Classic Mahogany)"
                   value={opt.name}
                   onChange={(e) =>
                     updateListItem(finishOptions, setFinishOptions, i, "name", e.target.value)
@@ -328,12 +408,88 @@ export default function AdminShowroomForm() {
                   <button
                     type="button"
                     className="icon-btn icon-btn-danger"
-                    onClick={() => removeListItem(finishOptions, setFinishOptions, i)}
+                    onClick={() => {
+                      removeListItem(finishOptions, setFinishOptions, i);
+                      setOpenPickerFor(null);
+                    }}
                   >
                     ✕
                   </button>
                 )}
               </div>
+
+              <button
+                type="button"
+                style={pickerStyles.toggle}
+                onClick={() => setOpenPickerFor(openPickerFor === i ? null : i)}
+              >
+                {openPickerFor === i ? "Close NewMika library" : "🎨 Pick from NewMika library"}
+              </button>
+
+              {openPickerFor === i && (
+                <div style={pickerStyles.panel}>
+                  <div style={pickerStyles.grid}>
+                    {NEWMIKA_SWATCHES.map((s) => (
+                      <button
+                        type="button"
+                        key={s.code}
+                        style={pickerStyles.card(opt.swatchImageUrl === s.imageUrl)}
+                        onClick={() => applyNewmikaSwatch(i, s)}
+                        title={`${s.name} (${s.code})`}
+                      >
+                        <img
+                          src={s.imageUrl}
+                          alt={s.name}
+                          style={pickerStyles.thumb}
+                          loading="lazy"
+                          onError={(e) => {
+                            e.currentTarget.style.background = s.colorHex;
+                            e.currentTarget.removeAttribute("src");
+                          }}
+                        />
+                        <span style={pickerStyles.name}>{s.name}</span>
+                        <span style={pickerStyles.code}>
+                          {s.series} · {s.code}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                  <p style={pickerStyles.footer}>
+                    Need another decor? Open{" "}
+                    <a href={NEWMIKA_SITE_URL} target="_blank" rel="noreferrer">
+                      newmika.com.ph
+                    </a>
+                    , right-click the swatch → "Copy image address", and paste it
+                    in the field below.
+                  </p>
+                </div>
+              )}
+
+              <input
+                placeholder="Swatch photo URL (filled by the NewMika library, or paste your own)"
+                value={opt.swatchImageUrl || ""}
+                onChange={(e) =>
+                  updateListItem(finishOptions, setFinishOptions, i, "swatchImageUrl", e.target.value)
+                }
+              />
+              {opt.swatchImageUrl && (
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <img
+                    src={opt.swatchImageUrl}
+                    alt={`${opt.name || "Finish"} reference`}
+                    className="option-image-preview"
+                  />
+                  <button
+                    type="button"
+                    className="btn-link"
+                    onClick={() =>
+                      updateListItem(finishOptions, setFinishOptions, i, "swatchImageUrl", "")
+                    }
+                  >
+                    Remove photo
+                  </button>
+                </div>
+              )}
             </div>
           ))}
           <button

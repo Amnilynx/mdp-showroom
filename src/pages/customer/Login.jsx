@@ -98,14 +98,16 @@ export default function Login() {
     // certain Brave/Safari/extension setups) never fire Firebase's own
     // "popup was closed" rejection if the user closes the Google tab/window
     // manually. Without this, googleBusy would stay true forever and the
-    // button would look permanently stuck. If nothing has resolved this
-    // within 15s, we forcibly reset the UI so the person can try again.
+    // button would look permanently stuck. If nothing has resolved within
+    // 90s, we forcibly reset the UI so the person can try again. (90s, not
+    // shorter: the Google account chooser is always shown now — see
+    // firebase.js — and picking an account or typing a password takes time.)
     const safetyTimer = setTimeout(() => {
       setGoogleBusy(false);
       setError(
         "Google sign-in didn't complete. If a popup appeared and you closed it, please try again."
       );
-    }, 15000);
+    }, 90000);
 
     try {
       const cred = await signInWithPopup(auth, googleProvider);

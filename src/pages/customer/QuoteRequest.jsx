@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import Navbar from "../../components/Navbar";
 import Footer from "../../components/Footer";
@@ -6,8 +6,12 @@ import Breadcrumb from "../../components/Breadcrumb";
 import StepProgress from "../../components/StepProgress";
 import { useAuth } from "../../context/AuthContext";
 import { useCart } from "../../context/CartContext";
-import { createOrder, HARDWARE_INSTALLATION_RATE } from "../../lib/orders";
-import { getSettings } from "../../lib/settings";
+import {
+  createOrder,
+  HARDWARE_INSTALLATION_RATE,
+  DEPOSIT_RATE_STANDARD,
+  DEPOSIT_RATE_COMPANY,
+} from "../../lib/orders";
 
 export default function QuoteRequest() {
   const { user, profile } = useAuth();
@@ -23,38 +27,35 @@ export default function QuoteRequest() {
   const [floorPlanUrl, setFloorPlanUrl] = useState("");
   const [projectDetails, setProjectDetails] = useState("");
   const [consentGiven, setConsentGiven] = useState(false);
+  // "catalog" = built from the showroom (50% deposit); "pure_custom" = a
+  // from-scratch commission for a company, quoted by MDP (30% deposit).
+  const [orderType, setOrderType] = useState("catalog");
+  const [companyName, setCompanyName] = useState("");
+  const pureCustom = orderType === "pure_custom";
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
-  // Live, admin-adjustable rate — falls back to the hardcoded constant
-  // until settings load (or if the settings doc doesn't exist yet).
-  const [hardwareRate, setHardwareRate] = useState(HARDWARE_INSTALLATION_RATE);
-
-  useEffect(() => {
-    let cancelled = false;
-    getSettings()
-      .then((s) => {
-        if (!cancelled) setHardwareRate(s.hardwareInstallationRate);
-      })
-      .catch(() => {
-        // Keep the fallback rate — not worth blocking the page over this.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   const subtotal = items.reduce((sum, i) => sum + (i.subtotal || 0), 0);
-  const hardwareInstallFee = Math.round(subtotal * hardwareRate);
+  const hardwareInstallFee = Math.round(subtotal * HARDWARE_INSTALLATION_RATE);
   const provisionalTotal = subtotal + hardwareInstallFee;
-  const deposit = Math.round(provisionalTotal * 0.5);
+  const depositRate = pureCustom ? DEPOSIT_RATE_COMPANY : DEPOSIT_RATE_STANDARD;
+  const deposit = pureCustom ? 0 : Math.round(provisionalTotal * depositRate);
 
   async function handleSubmit(e) {
     e.preventDefault();
     setError("");
 
-    if (items.length === 0) {
-      setError("Add at least one configuration before requesting a quote.");
+    if (pureCustom) {
+      if (!companyName.trim()) {
+        setError("Please enter your company name.");
+        return;
+      }
+      if (projectDetails.trim().length < 30) {
+        setError("Please describe what you need built (at least a few sentences) so we can quote it.");
+        return;
+      }
+    } else if (items.length === 0) {
+      setError("Add at least one configuration, or choose Pure Custom above.");
       return;
     }
     if (!consentGiven) {
@@ -66,7 +67,10 @@ export default function QuoteRequest() {
     try {
       const orderId = await createOrder({
         customerId: user.uid,
-        configurations: items.map((i) => ({
+        orderType,
+        depositRate,
+        companyName: pureCustom ? companyName.trim() : null,
+        configurations: (pureCustom ? [] : items).map((i) => ({
           furnitureId: i.furnitureId,
           furnitureName: i.furnitureName,
           shapeType: i.shapeType,
@@ -78,7 +82,7 @@ export default function QuoteRequest() {
           addOnsTotal: i.addOnsTotal,
           subtotal: i.subtotal,
         })),
-        provisionalTotal,
+        provisionalTotal: pureCustom ? 0 : provisionalTotal,
         depositAmount: deposit,
         contact: {
           name: contactName,
@@ -92,7 +96,7 @@ export default function QuoteRequest() {
         projectDetails,
         consentGiven,
       });
-      clearCart();
+      if (!pureCustom) clearCart();
       navigate(`/orders/${orderId}`);
     } catch (err) {
       setError("Something went wrong submitting your request. Please try again.");
@@ -115,12 +119,49 @@ export default function QuoteRequest() {
         />
         <StepProgress currentStep={4} />
 
-        <h1>What you're requesting:</h1>
+        <div className="order-type-picker" role="radiogroup" aria-label="Order type">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={!pureCustom}
+            className={"order-type-card" + (!pureCustom ? " order-type-card-on" : "")}
+            onClick={() => setOrderType("catalog")}
+          >
+            <strong>From our showroom</strong>
+            <span>Pick and customize from our catalog. 50% deposit.</span>
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={pureCustom}
+            className={"order-type-card" + (pureCustom ? " order-type-card-on" : "")}
+            onClick={() => setOrderType("pure_custom")}
+          >
+            <strong>Pure custom — for companies</strong>
+            <span>Built from scratch to your own design or brief. 30% deposit.</span>
+          </button>
+        </div>
+
+        <h1>{pureCustom ? "Your custom project:" : "What you're requesting:"}</h1>
 
         <div className="quote-layout">
           {/* Left: selected configurations */}
           <div className="quote-left">
-            {items.length === 0 && (
+            {pureCustom && (
+              <div className="custom-intro">
+                <p><strong>How a pure custom order works</strong></p>
+                <ol>
+                  <li>Tell us about your project and company on the right.</li>
+                  <li>Send your drawings, plans or letter of intent in the chat after you submit.</li>
+                  <li>MDP reviews it and sends you a quotation with the final price.</li>
+                  <li>Approve it and pay a <b>30% deposit</b> to start.</li>
+                </ol>
+                <p className="custom-intro-note">
+                  There is no price estimate for custom projects: we price them after reviewing your brief.
+                </p>
+              </div>
+            )}
+            {!pureCustom && items.length === 0 && (
               <p>
                 Your quote request is empty.{" "}
                 <Link to="/showroom">Browse the showroom</Link> to add a
@@ -128,7 +169,7 @@ export default function QuoteRequest() {
               </p>
             )}
 
-            {items.map((item) => (
+            {!pureCustom && items.map((item) => (
               <div className="quote-item-card" key={item.cartId}>
                 <div>
                   <strong>
@@ -151,17 +192,20 @@ export default function QuoteRequest() {
               </div>
             ))}
 
+            {!pureCustom && (
             <Link to="/showroom" className="add-another-link">
               + Add another quote
             </Link>
+            )}
 
+            {!pureCustom && (
             <div className="provisional-breakdown">
               <div className="price-row">
                 <span>Subtotal</span>
                 <span>₱{subtotal.toLocaleString()}</span>
               </div>
               <div className="price-row">
-                <span>Hardware &amp; installation ({Math.round(hardwareRate * 100)}%)</span>
+                <span>Hardware &amp; installation (10%)</span>
                 <span>₱{hardwareInstallFee.toLocaleString()}</span>
               </div>
               <div className="price-row price-row-total-light">
@@ -173,15 +217,30 @@ export default function QuoteRequest() {
               </p>
             </div>
 
+            )}
+
             <p className="quote-count-line">
-              {items.length} Selected Configuration{items.length !== 1 && "s"} ·
-              Provisional: ₱{provisionalTotal.toLocaleString()}
+              {pureCustom
+                ? "Pure custom order · Price quoted by MDP · 30% deposit"
+                : `${items.length} Selected Configuration${items.length !== 1 ? "s" : ""} · Provisional: ₱${provisionalTotal.toLocaleString()}`}
             </p>
           </div>
 
           {/* Right: inquiry details form */}
           <form className="quote-right" onSubmit={handleSubmit}>
             <h4>Inquiry Details:</h4>
+
+            {pureCustom && (
+              <label>
+                Company Name
+                <input
+                  value={companyName}
+                  onChange={(e) => setCompanyName(e.target.value)}
+                  placeholder="e.g. ABC Trading Corp."
+                  required
+                />
+              </label>
+            )}
 
             <div className="admin-form-grid">
               <label>
@@ -250,12 +309,17 @@ export default function QuoteRequest() {
             </label>
 
             <label>
-              Project Details
+              {pureCustom ? "Describe your project (what, where, how many, timeline)" : "Project Details"}
               <textarea
-                rows={4}
+                rows={pureCustom ? 7 : 4}
+                required={pureCustom}
                 value={projectDetails}
                 onChange={(e) => setProjectDetails(e.target.value)}
-                placeholder="Tell us more about your space and timeline…"
+                placeholder={
+                  pureCustom
+                    ? "e.g. 12 display counters for our new store branch, laminated, with LED strips. Plans to follow in chat."
+                    : "Tell us more about your space and timeline…"
+                }
               />
             </label>
 
@@ -265,18 +329,23 @@ export default function QuoteRequest() {
                 checked={consentGiven}
                 onChange={(e) => setConsentGiven(e.target.checked)}
               />
-              I agree on the Privacy Policy and consent to be contacted
-              regarding this inquiry.
+              <span>
+                I agree to the{" "}
+                <Link to="/privacy" target="_blank" rel="noopener noreferrer">
+                  Privacy Policy
+                </Link>{" "}
+                and consent to be contacted regarding this inquiry.
+              </span>
             </label>
 
-            {error && <p className="form-error">{error}</p>}
+            {error && (
+              <p className="form-error" role="alert">
+                {error}
+              </p>
+            )}
 
-            <button
-              type="submit"
-              className="btn btn-primary"
-              disabled={submitting || items.length === 0}
-            >
-              {submitting ? "Submitting…" : "Submit Customization Request"}
+            <button type="submit" className="btn btn-primary" disabled={submitting}>
+              {submitting ? "Submitting…" : pureCustom ? "Submit Custom Request" : "Submit Customization Request"}
             </button>
           </form>
         </div>
