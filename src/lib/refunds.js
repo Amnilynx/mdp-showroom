@@ -31,6 +31,12 @@ export function getPaymentSummary(order, receipts = []) {
   const terminal = TERMINAL_STATUSES.includes(order.status);
   const depositRate = getDepositRate(order);
 
+  // Progress billings and the final 10% that MDP has verified as paid.
+  const billingsPaid = (order.billings || [])
+    .filter((b) => b.paidAt)
+    .reduce((n, b) => n + (Number(b.amount) || 0), 0);
+  const billingsIssued = (order.billings || []).reduce((n, b) => n + (Number(b.amount) || 0), 0);
+
   // Deposit actually required now (only ever moves DOWN with a deduction).
   const adjustedDeposit =
     adjustments < 0
@@ -50,7 +56,9 @@ export function getPaymentSummary(order, receipts = []) {
   let refundDue = 0;
   let refundReason = null;
   if (terminal) {
-    refundDue = Math.max(0, depositPaid - refunded);
+    // Everything the customer paid on an order that ended (the owners deduct
+    // the cost of bought materials by hand when they send the refund).
+    refundDue = Math.max(0, depositPaid + billingsPaid - refunded);
     refundReason = refundDue > 0 ? "order_ended" : null;
   } else {
     refundDue = Math.max(0, depositOverpaid - refunded);
@@ -64,13 +72,13 @@ export function getPaymentSummary(order, receipts = []) {
   // Money the customer has effectively paid toward the new total: what
   // they paid, capped at the (possibly lowered) deposit, since anything
   // above that is on its way back.
-  const paidCounted = terminal ? 0 : Math.min(depositPaid, adjustedDeposit);
+  const paidCounted = terminal ? 0 : Math.min(depositPaid, adjustedDeposit) + billingsPaid;
   const balance = terminal ? 0 : Math.max(0, payable - paidCounted);
 
   const actions = [];
   if (refundReason === "order_ended") {
     actions.push(
-      `This order was ${order.status}. Its verified deposit of ₱${depositPaid.toLocaleString()} must go back to the customer — ₱${refundDue.toLocaleString()} is still unrefunded. Send it, then attach the receipt in the Refunds card.`
+      `This order was ${order.status}. Its verified payments of ₱${(depositPaid + billingsPaid).toLocaleString()} (deposit and billings) must go back to the customer — ₱${refundDue.toLocaleString()} is still unrefunded. Send it, then attach the receipt in the Refunds card.`
     );
   }
   if (refundReason === "deduction") {
@@ -83,6 +91,9 @@ export function getPaymentSummary(order, receipts = []) {
     deposit: originalDeposit,
     adjustedDeposit,
     depositPaid,
+    billingsPaid,
+    billingsIssued,
+    totalPaid: terminal ? 0 : depositPaid + billingsPaid,
     depositOverpaid,
     base,
     adjustments,

@@ -5,6 +5,8 @@ import {
   subscribeToMessages,
   downloadAttachment,
   getAttachments,
+  getAttachmentImageUrl,
+  isImageFile,
   validateAttachments,
   ALLOWED_EXTENSIONS,
   MAX_FILES_PER_SEND,
@@ -31,6 +33,46 @@ function linkify(text) {
   );
 }
 
+// One photo inside a message: loads lazily, tap to open full size.
+function ChatImage({ orderId, messageId, attachment, onOpen }) {
+  const [url, setUrl] = useState(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    getAttachmentImageUrl(orderId, messageId, attachment)
+      .then((u) => alive && setUrl(u))
+      .catch(() => alive && setFailed(true));
+    return () => {
+      alive = false;
+    };
+  }, [orderId, messageId, attachment.fileIndex]);
+
+  if (failed) return <span className="chat-image-missing">Photo couldn't be loaded</span>;
+  if (!url) return <span className="chat-image-loading" aria-label="Loading photo" />;
+  return (
+    <button
+      type="button"
+      className="chat-image-btn"
+      onClick={() => onOpen({ url, attachment })}
+      title="Tap to view full size"
+    >
+      <img className="chat-image" src={url} alt={attachment.name} />
+    </button>
+  );
+}
+
+// Small thumbnail for a photo picked but not yet sent.
+function PickedThumb({ file }) {
+  const [url, setUrl] = useState(null);
+  useEffect(() => {
+    const u = URL.createObjectURL(file);
+    setUrl(u);
+    return () => URL.revokeObjectURL(u);
+  }, [file]);
+  return url ? <img className="chat-picked-thumb" src={url} alt="" /> : null;
+}
+
 export default function ChatThread({ orderId }) {
   const { user, profile } = useAuth();
   const muted = useMuted();
@@ -41,6 +83,7 @@ export default function ChatThread({ orderId }) {
   const [files, setFiles] = useState([]); // up to MAX_FILES_PER_SEND
   const [sending, setSending] = useState(false);
   const [downloadingKey, setDownloadingKey] = useState(null);
+  const [viewer, setViewer] = useState(null); // { url, attachment, messageId } photo shown full size
   const knownIds = useRef(null); // message ids already seen, to spot new arrivals
   const bottomRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -206,7 +249,22 @@ export default function ChatThread({ orderId }) {
                   <span className="chat-sender-name">{m.senderName}</span>
                 )}
                 {m.text && <p>{linkify(m.text)}</p>}
-                {attachments.map((a) => {
+                {attachments.some((a) => isImageFile(a)) && (
+                  <div className="chat-images">
+                    {attachments
+                      .filter((a) => isImageFile(a))
+                      .map((a) => (
+                        <ChatImage
+                          key={m.id + ":" + a.fileIndex}
+                          orderId={orderId}
+                          messageId={m.id}
+                          attachment={a}
+                          onOpen={(v) => setViewer({ ...v, messageId: m.id })}
+                        />
+                      ))}
+                  </div>
+                )}
+                {attachments.filter((a) => !isImageFile(a)).map((a) => {
                   const key = m.id + ":" + a.fileIndex + ":" + a.name;
                   return (
                     <button
@@ -239,10 +297,19 @@ export default function ChatThread({ orderId }) {
 
       {files.map((f, i) => (
         <div className="chat-file-preview" key={f.name + i}>
-          <span className="chat-file-icon" aria-hidden="true">📄</span>
+          {isImageFile(f) ? (
+            <PickedThumb file={f} />
+          ) : (
+            <span className="chat-file-icon" aria-hidden="true">📄</span>
+          )}
           <span className="chat-file-info">
             <span className="chat-file-name">{f.name}</span>
-            <span className="chat-file-size">{formatSize(f.size)}</span>
+            <span className="chat-file-size">
+              {formatSize(f.size)}
+              {isImageFile(f) && f.size > 1.8 * 1024 * 1024 && !/\.gif$/i.test(f.name)
+                ? " · will be shrunk"
+                : ""}
+            </span>
           </span>
           <button
             type="button"
@@ -270,8 +337,8 @@ export default function ChatThread({ orderId }) {
           className="chat-attach-btn"
           onClick={() => fileInputRef.current?.click()}
           disabled={sending || files.length >= MAX_FILES_PER_SEND}
-          title={`Attach up to ${MAX_FILES_PER_SEND} PDF, Word or Excel files (max 2 MB each)`}
-          aria-label="Attach files"
+          title={`Attach up to ${MAX_FILES_PER_SEND} photos or PDF, Word or Excel files`}
+          aria-label="Attach photos or files"
         >
           📎{files.length > 0 ? ` ${files.length}` : ""}
         </button>
@@ -279,6 +346,20 @@ export default function ChatThread({ orderId }) {
           placeholder="Write a message…"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
+          onPaste={(e) => {
+            const pasted = Array.from(e.clipboardData?.files || []).filter((f) => isImageFile(f));
+            if (!pasted.length) return;
+            e.preventDefault();
+            const named = pasted.map((f, i) =>
+              f.name && f.name !== "image.png"
+                ? f
+                : new File([f], `pasted-photo-${Date.now()}-${i}.png`, { type: f.type })
+            );
+            const combined = [...files, ...named];
+            const problem = validateAttachments(combined, profile?.role);
+            if (problem) alert(problem);
+            else setFiles(combined);
+          }}
           disabled={sending}
         />
         <button
@@ -289,11 +370,30 @@ export default function ChatThread({ orderId }) {
         </button>
       </form>
       <p className="chat-file-hint">
-        Up to {MAX_FILES_PER_SEND} files per message, 2 MB each.{" "}
+        Photos, PDF, Word or Excel · up to {MAX_FILES_PER_SEND} per message. Photos are shrunk
+        automatically; other files can be 2 MB each.{" "}
         {profile?.role === "manager"
           ? "Larger files: please email them to the customer directly."
           : `Larger files: please email them to ${COMPANY_EMAIL} and mention your order number.`}
       </p>
+      {viewer && (
+        <div
+          className="chat-lightbox"
+          role="dialog"
+          aria-label="Photo"
+          onClick={() => setViewer(null)}
+        >
+          <img src={viewer.url} alt={viewer.attachment.name} onClick={(e) => e.stopPropagation()} />
+          <div className="chat-lightbox-bar" onClick={(e) => e.stopPropagation()}>
+            <button type="button" onClick={() => handleDownload({ id: viewer.messageId }, viewer.attachment)}>
+              Download
+            </button>
+            <button type="button" onClick={() => setViewer(null)}>
+              Close
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

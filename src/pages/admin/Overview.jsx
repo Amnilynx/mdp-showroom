@@ -2,20 +2,12 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import AdminLayout from "../../components/AdminLayout";
 import { getAllOrders, STATUS_LABELS } from "../../lib/orders";
-import { getSettings, updateSettings } from "../../lib/settings";
 
 export default function AdminOverview() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const navigate = useNavigate();
-
-  // Pricing settings (Hardware & Installation rate)
-  const [rateDraft, setRateDraft] = useState("10");
-  const [rateLoading, setRateLoading] = useState(true);
-  const [rateSaving, setRateSaving] = useState(false);
-  const [rateSaved, setRateSaved] = useState(false);
-  const [rateError, setRateError] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -34,43 +26,6 @@ export default function AdminOverview() {
       cancelled = true;
     };
   }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function loadSettings() {
-      try {
-        const s = await getSettings();
-        if (!cancelled) setRateDraft(String(Math.round(s.hardwareInstallationRate * 100)));
-      } catch (err) {
-        // Keep the default draft — not worth blocking the page over this.
-      } finally {
-        if (!cancelled) setRateLoading(false);
-      }
-    }
-    loadSettings();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  async function handleSaveRate() {
-    const percent = Number(rateDraft);
-    if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
-      setRateError("Enter a percentage between 0 and 100.");
-      return;
-    }
-    setRateError("");
-    setRateSaving(true);
-    setRateSaved(false);
-    try {
-      await updateSettings({ hardwareInstallationRate: percent / 100 });
-      setRateSaved(true);
-    } catch (err) {
-      setRateError("Failed to save. Please try again.");
-    } finally {
-      setRateSaving(false);
-    }
-  }
 
   const total = orders.length;
   const pendingReview = orders.filter((o) =>
@@ -161,54 +116,6 @@ export default function AdminOverview() {
             <Link to="/admin/reports" className="btn btn-primary studio-note-btn">
               Open Reports →
             </Link>
-          </div>
-
-          {/* Pricing Settings — admin-adjustable Hardware & Installation rate.
-              Applied to every new quote calculated client-side in
-              QuoteRequest.jsx / ShowroomCustomize.jsx via lib/settings.js. */}
-          <div className="ticket-card pricing-settings-card">
-            <h4>Pricing Settings</h4>
-            <p className="pricing-settings-hint">
-              Hardware &amp; installation fee, applied on top of every quote's
-              item subtotal.
-            </p>
-            {rateLoading ? (
-              <p>Loading…</p>
-            ) : (
-              <>
-                <div className="inline-form-row pricing-rate-row">
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="0.5"
-                    value={rateDraft}
-                    onChange={(e) => {
-                      setRateDraft(e.target.value);
-                      setRateSaved(false);
-                    }}
-                  />
-                  <span className="pricing-rate-suffix">%</span>
-                  <button
-                    className="btn btn-primary"
-                    onClick={handleSaveRate}
-                    disabled={rateSaving}
-                  >
-                    {rateSaving ? "Saving…" : "Save"}
-                  </button>
-                </div>
-                {rateError && <p className="form-error">{rateError}</p>}
-                {rateSaved && !rateError && (
-                  <p className="form-success">
-                    ✓ Saved. New quotes will use this rate.
-                  </p>
-                )}
-                <p className="pricing-settings-note">
-                  Doesn't change orders already submitted — only new quotes
-                  going forward.
-                </p>
-              </>
-            )}
           </div>
         </div>
       </div>

@@ -186,6 +186,30 @@ export function generateOrderReceipt(order) {
     y += 20;
   }
 
+  // ---------- Progress billings and the final 10% ----------
+  if ((order.billings || []).length) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.setTextColor(0);
+    doc.text("Billings", marginX, y);
+    y += 6;
+    autoTable(doc, {
+      startY: y,
+      margin: { left: marginX, right: marginX },
+      head: [["Billing", "Issued", "Amount", "Status"]],
+      body: order.billings.map((b) => [
+        b.label,
+        b.issuedAt ? new Date(b.issuedAt).toLocaleDateString("en-PH") : "",
+        "PHP " + Number(b.amount).toLocaleString(),
+        b.paidAt ? "Paid" : "Awaiting payment",
+      ]),
+      theme: "plain",
+      styles: { fontSize: 9, cellPadding: 3 },
+      headStyles: { fontStyle: "bold" },
+    });
+    y = doc.lastAutoTable.finalY + 20;
+  }
+
   // ---------- Footer note ----------
   doc.setFont("helvetica", "italic");
   doc.setFontSize(8);

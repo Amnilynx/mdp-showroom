@@ -67,6 +67,15 @@ export default function PaymentSummary({ order, receipts = [] }) {
           <span>{order.depositConfirmed ? peso(s.depositPaid) : peso(s.adjustedDeposit)}</span>
         </div>
 
+        {(order.billings || []).map((b) => (
+          <div className="ticket-config-row summary-change-row" key={b.id}>
+            <span>
+              ↳ {b.label} {b.paidAt ? "(paid, verified)" : "(billed, not yet verified)"}
+            </span>
+            <span>{peso(b.amount)}</span>
+          </div>
+        ))}
+
         {!s.terminal && (
           <div className="ticket-config-row ticket-config-total">
             <span>Remaining balance</span>

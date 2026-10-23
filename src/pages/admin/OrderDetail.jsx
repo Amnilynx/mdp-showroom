@@ -4,6 +4,7 @@ import AdminLayout from "../../components/AdminLayout";
 import ChatThread from "../../components/ChatThread";
 import PaymentSummary from "../../components/PaymentSummary";
 import ReceiptsPanel from "../../components/ReceiptsPanel";
+import BillingPanel from "../../components/BillingPanel";
 import QuoteFiles from "../../components/QuoteFiles";
 import ChangeRequestFiles from "../../components/ChangeRequestFiles";
 import { useUnread } from "../../lib/chatPresence";
@@ -43,6 +44,7 @@ import {
   adminExtendDeposit,
   adminCloseUnpaidOrder,
   getDepositStage,
+  getBillingPlan,
   getDepositDaysLeft,
   getDepositDueMillis,
   getQuoteAcceptedMillis,
@@ -151,6 +153,20 @@ export default function AdminOrderDetail() {
         `${verb} this order?\n\nThis drops the order entirely and cannot be undone from here.${depositWarning}`
       );
       if (!confirmed) return;
+    }
+
+    // Completing an order while a bill is still unpaid, or before the final
+    // 10% was ever billed, is almost always a slip — say so.
+    if (statusDraft === "completed") {
+      const plan = getBillingPlan(order);
+      const unpaid = (order.billings || []).filter((b) => !b.paidAt);
+      let warn = "";
+      if (!plan.finalBilling) {
+        warn = `The final ${plan.finalPercent}% (${"₱" + plan.finalAmount.toLocaleString()}) has not been billed yet.`;
+      } else if (unpaid.length) {
+        warn = `${unpaid.length} billing${unpaid.length === 1 ? " is" : "s are"} not yet verified as paid.`;
+      }
+      if (warn && !window.confirm(`${warn}\n\nMark the order Completed anyway?`)) return;
     }
 
     setBusy(true);
@@ -928,8 +944,18 @@ export default function AdminOrderDetail() {
             </div>
           )}
 
-          {/* Every proof in one place: deposit payment screenshots, refund
-              receipts and deduction proof. */}
+          {/* Progress billings and the final 10% at turnover. */}
+          <BillingPanel
+            order={order}
+            orderId={orderId}
+            receipts={receipts}
+            role="admin"
+            userId={user.uid}
+            onChange={load}
+          />
+
+          {/* Every proof in one place: deposit payment screenshots, billing
+              payments, refund receipts and deduction proof. */}
           <ReceiptsPanel
             order={order}
             orderId={orderId}

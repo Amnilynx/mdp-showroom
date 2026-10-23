@@ -12,10 +12,12 @@ import {
   serverTimestamp,
 } from "firebase/firestore";
 import { sendSystemMessage } from "./messages";
-import { PAYMENT_METHODS } from "./orders";
+import { paymentMethodLabel } from "./orders";
 
 // Receipts — every piece of payment proof on an order, in one place:
 //   deposit_payment  the customer's payment screenshot(s) + reference number
+//   billing_payment  the customer's proof for one progress / final billing
+//                    (carries billingId, see order.billings in lib/orders.js)
 //   refund           money MDP sent back to the customer (receipt)
 //   deduction        proof that an accepted deduction was applied
 //
@@ -35,12 +37,14 @@ const TOTAL_IMAGE_BUDGET = 800000;
 
 export const RECEIPT_KIND_LABELS = {
   deposit_payment: "Deposit payment",
+  billing_payment: "Billing payment",
   refund: "Refund",
   deduction: "Deduction proof",
 };
 
 export const RECEIPT_KIND_FROM = {
   deposit_payment: "from customer",
+  billing_payment: "from customer",
   refund: "from MDP",
   deduction: "from MDP",
 };
@@ -96,7 +100,7 @@ function compressImageToBudget(file, maxChars) {
 // in the order chat for receipts the customer needs to know about.
 export async function addReceipt(
   orderId,
-  { kind, amount, referenceNumber, note, files = [], createdBy, notify = true }
+  { kind, amount, referenceNumber, note, files = [], createdBy, notify = true, billingId = null }
 ) {
   if (files.length > MAX_RECEIPT_FILES) {
     throw new Error(`You can attach up to ${MAX_RECEIPT_FILES} images per receipt.`);
@@ -121,6 +125,7 @@ export async function addReceipt(
     referenceNumber: referenceNumber?.trim() || "",
     note: note?.trim() || "",
     images,
+    ...(billingId ? { billingId } : {}),
     createdBy,
     createdAt: serverTimestamp(),
   });
@@ -290,6 +295,34 @@ export async function clearDepositReceiptConfirmations(orderId, receipts) {
   );
 }
 
+// MDP verifying / un-verifying ONE billing locks / unlocks the customer's
+// receipts for it.
+export async function confirmBillingReceipts(orderId, receipts, billingId, uid) {
+  await Promise.all(
+    receipts
+      .filter((r) => r.kind === "billing_payment" && r.billingId === billingId && !r.confirmed)
+      .map((r) =>
+        updateDoc(doc(db, "orders", orderId, "receipts", r.id), {
+          confirmedBy: uid,
+          confirmedAt: serverTimestamp(),
+        })
+      )
+  );
+}
+
+export async function clearBillingReceiptConfirmations(orderId, receipts, billingId) {
+  await Promise.all(
+    receipts
+      .filter((r) => r.kind === "billing_payment" && r.billingId === billingId && r.confirmed)
+      .map((r) =>
+        updateDoc(doc(db, "orders", orderId, "receipts", r.id), {
+          confirmedBy: null,
+          confirmedAt: null,
+        })
+      )
+  );
+}
+
 // One flat, newest-first list for the UI: new receipt documents plus
 // anything recorded the old way on the order itself.
 export function buildReceiptEntries(order, receipts = []) {
@@ -305,6 +338,7 @@ export function buildReceiptEntries(order, receipts = []) {
     referenceNumber: r.referenceNumber || "",
     note: r.note || "",
     images: r.images || [],
+    billingId: r.billingId || null,
     date: r.date,
     methodLabel: "",
     legacy: false,
@@ -324,7 +358,7 @@ export function buildReceiptEntries(order, receipts = []) {
       date: order.paymentSubmittedAt?.toDate
         ? order.paymentSubmittedAt.toDate().toISOString()
         : null,
-      methodLabel: PAYMENT_METHODS[order.paymentMethod]?.label || "",
+      methodLabel: paymentMethodLabel(order.paymentMethod),
       legacy: true,
     });
   }

@@ -6,6 +6,7 @@ import Breadcrumb from "../../components/Breadcrumb";
 import StepProgress from "../../components/StepProgress";
 import ChatThread from "../../components/ChatThread";
 import ReceiptsPanel from "../../components/ReceiptsPanel";
+import BillingPanel from "../../components/BillingPanel";
 import QuoteFiles from "../../components/QuoteFiles";
 import ChangeRequestFiles from "../../components/ChangeRequestFiles";
 import { sendMessage, validateAttachments, ALLOWED_EXTENSIONS, MAX_FILES_PER_SEND } from "../../lib/messages";
@@ -452,6 +453,18 @@ export default function OrderTicket() {
               </div>
             )}
 
+            {/* Progress billings and the final 10% at turnover. */}
+            {!isTerminal && (
+              <BillingPanel
+                order={order}
+                orderId={orderId}
+                receipts={receipts}
+                role="customer"
+                userId={user.uid}
+                onChange={load}
+              />
+            )}
+
             {/* All proof in one place: your payment screenshots and any
                 refund or deduction receipts from MDP. */}
             <ReceiptsPanel
@@ -511,18 +524,24 @@ export default function OrderTicket() {
                       <td>₱{c.subtotal.toLocaleString()}</td>
                     </tr>
                   ))}
-                  {!isPureCustom(order) && (
-                  <tr>
-                    <td>Hardware &amp; installation</td>
-                    <td>
-                      ₱
-                      {(
-                        order.provisionalTotal -
-                        order.configurations.reduce((s, c) => s + c.subtotal, 0)
-                      ).toLocaleString()}
-                    </td>
-                  </tr>
-                  )}
+                  {/* Older orders were created with a 10% hardware & installation
+                      fee. New orders have none, so this row only appears when
+                      the stored total is higher than the items. */}
+                  {!isPureCustom(order) &&
+                    order.provisionalTotal -
+                      order.configurations.reduce((s, c) => s + c.subtotal, 0) >
+                      0 && (
+                      <tr>
+                        <td>Hardware &amp; installation</td>
+                        <td>
+                          ₱
+                          {(
+                            order.provisionalTotal -
+                            order.configurations.reduce((s, c) => s + c.subtotal, 0)
+                          ).toLocaleString()}
+                        </td>
+                      </tr>
+                    )}
                   <tr className="ticket-price-total-row">
                     <td>
                       {order.finalPrice
@@ -757,7 +776,7 @@ export default function OrderTicket() {
                         : `✔ ${noticeFiles.length} file${noticeFiles.length === 1 ? "" : "s"} attached`}
                     </span>
                     <span className="notice-drop-sub">
-                      PDF, Word or Excel · up to {MAX_FILES_PER_SEND} files · 2 MB each
+                      Photo or scan, PDF, Word or Excel · up to {MAX_FILES_PER_SEND} files
                     </span>
                     <input
                       type="file"
@@ -921,7 +940,7 @@ export default function OrderTicket() {
               <span className="how-it-works-num">3</span>
               <div>
                 <strong>Ready for Delivery</strong>
-                <p>We schedule installation at your home.</p>
+                <p>We schedule installation, then turn over. The last 10% is paid at turnover.</p>
               </div>
             </div>
           </div>

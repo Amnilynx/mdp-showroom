@@ -8,7 +8,6 @@ import { useAuth } from "../../context/AuthContext";
 import { useCart } from "../../context/CartContext";
 import {
   createOrder,
-  HARDWARE_INSTALLATION_RATE,
   DEPOSIT_RATE_STANDARD,
   DEPOSIT_RATE_COMPANY,
 } from "../../lib/orders";
@@ -36,8 +35,8 @@ export default function QuoteRequest() {
   const [error, setError] = useState("");
 
   const subtotal = items.reduce((sum, i) => sum + (i.subtotal || 0), 0);
-  const hardwareInstallFee = Math.round(subtotal * HARDWARE_INSTALLATION_RATE);
-  const provisionalTotal = subtotal + hardwareInstallFee;
+  // No separate hardware & installation fee: the quote is just the items.
+  const provisionalTotal = subtotal;
   const depositRate = pureCustom ? DEPOSIT_RATE_COMPANY : DEPOSIT_RATE_STANDARD;
   const deposit = pureCustom ? 0 : Math.round(provisionalTotal * depositRate);
 
@@ -203,10 +202,6 @@ export default function QuoteRequest() {
               <div className="price-row">
                 <span>Subtotal</span>
                 <span>₱{subtotal.toLocaleString()}</span>
-              </div>
-              <div className="price-row">
-                <span>Hardware &amp; installation (10%)</span>
-                <span>₱{hardwareInstallFee.toLocaleString()}</span>
               </div>
               <div className="price-row price-row-total-light">
                 <span>Provisional Total</span>

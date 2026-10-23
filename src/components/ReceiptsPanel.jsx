@@ -12,6 +12,10 @@ import {
   RECEIPT_KIND_FROM,
 } from "../lib/receipts";
 
+// Payments the CUSTOMER sends (MDP verifies them) versus receipts MDP issues
+// (the customer confirms them). billing_payment is verified from the Billing card.
+const isCustomerKind = (k) => k === "deposit_payment" || k === "billing_payment";
+
 const peso = (n) => "₱" + Math.abs(n).toLocaleString();
 
 function fmtDate(iso) {
@@ -46,7 +50,7 @@ function ReceiptForm({ initial, allowedKinds, onSave, onCancel, busy, error }) {
   const [localError, setLocalError] = useState("");
 
   const total = keep.length + files.length;
-  const showAmount = kind !== "deposit_payment";
+  const showAmount = !isCustomerKind(kind);
 
   function pick(e) {
     const picked = Array.from(e.target.files || []);
@@ -127,7 +131,7 @@ function ReceiptForm({ initial, allowedKinds, onSave, onCancel, busy, error }) {
 
       <label>
         Note (optional)
-        <input value={note} placeholder="e.g. refunded via GCash" onChange={(e) => setNote(e.target.value)} />
+        <input value={note} placeholder="e.g. refunded by bank transfer" onChange={(e) => setNote(e.target.value)} />
       </label>
 
       {(localError || error) && <p className="form-error">{localError || error}</p>}
@@ -171,7 +175,7 @@ export default function ReceiptsPanel({ order, orderId, receipts = [], role, use
   const needsMyAction = (e) =>
     e.source === "doc" &&
     !e.confirmed &&
-    (isAdmin ? e.kind === "deposit_payment" : e.kind !== "deposit_payment");
+    (isAdmin ? isCustomerKind(e.kind) : !isCustomerKind(e.kind));
   const openByDefault = (e) => needsMyAction(e);
   const pendingForMe = entries.filter(needsMyAction).length;
 
@@ -230,7 +234,7 @@ export default function ReceiptsPanel({ order, orderId, receipts = [], role, use
   }
 
   function statusBadge(e) {
-    if (e.kind === "deposit_payment") {
+    if (isCustomerKind(e.kind)) {
       return e.confirmed ? (
         <span className="receipt-badge receipt-badge-ok">✓ Verified</span>
       ) : (
@@ -278,11 +282,11 @@ export default function ReceiptsPanel({ order, orderId, receipts = [], role, use
 
         {entries.map((e) => {
           const isDoc = e.source === "doc";
-          const adminOwns = isDoc && e.kind !== "deposit_payment";
-          const canEdit = !e.confirmed && isDoc && (isAdmin ? adminOwns : e.kind === "deposit_payment");
+          const adminOwns = isDoc && !isCustomerKind(e.kind);
+          const canEdit = !e.confirmed && isDoc && (isAdmin ? adminOwns : isCustomerKind(e.kind));
           const canDelete = !e.confirmed && isAdmin && adminOwns;
           const canVerify = isAdmin && isDoc && e.kind === "deposit_payment";
-          const canConfirm = !isAdmin && isDoc && e.kind !== "deposit_payment" && !e.confirmed;
+          const canConfirm = !isAdmin && isDoc && !isCustomerKind(e.kind) && !e.confirmed;
           const isEditing = editingId === e.id;
 
           return (
@@ -338,7 +342,7 @@ export default function ReceiptsPanel({ order, orderId, receipts = [], role, use
                     {e.confirmed && e.confirmedDate && isDoc && (
                       <p className="receipt-locked-note">
                         🔒{" "}
-                        {e.kind === "deposit_payment"
+                        {isCustomerKind(e.kind)
                           ? "Verified by MDP"
                           : "Confirmed received by the customer"}{" "}
                         on {fmtDate(e.confirmedDate)}. It can no longer be changed.
@@ -347,8 +351,14 @@ export default function ReceiptsPanel({ order, orderId, receipts = [], role, use
 
                     {canVerify && !e.confirmed && (
                       <p className="receipt-hint">
-                        Check the reference and amount against your actual GCash or bank account, then verify.
+                        Check the reference and amount against your actual bank account, then verify.
                         Once verified, the customer can no longer change this receipt.
+                      </p>
+                    )}
+                    {isAdmin && isDoc && e.kind === "billing_payment" && !e.confirmed && (
+                      <p className="receipt-hint">
+                        Check this against your bank account, then press Verify payment on that billing in the
+                        Billing card.
                       </p>
                     )}
                     {canConfirm && (

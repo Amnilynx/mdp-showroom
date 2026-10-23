@@ -17,11 +17,9 @@ import { sendSystemMessage } from "./messages";
 
 const COLLECTION = "orders";
 
-// Fallback only — the live, admin-adjustable rate lives in Firestore
-// (settings/general.hardwareInstallationRate, see lib/settings.js).
-// Pages fetch the live value via getSettings() and fall back to this
-// constant if that doc doesn't exist yet or fails to load.
-export const HARDWARE_INSTALLATION_RATE = 0.10;
+// The 10% hardware & installation fee was removed: quotes are just the sum of
+// the items. Kept at 0 only so any older import still resolves.
+export const HARDWARE_INSTALLATION_RATE = 0;
 
 // Where to send manual payments. MDP takes payments by bank deposit only
 // (confirmed in Interviews 1 and 2), so the bank is the one and only method.
@@ -118,6 +116,17 @@ export const TERMINAL_STATUSES = ["rejected", "cancelled"];
 // created so the rule never changes retroactively.
 export const DEPOSIT_RATE_STANDARD = 0.5;
 export const DEPOSIT_RATE_COMPANY = 0.3;
+
+// Payment schedule (confirmed in Interviews 1 and 2):
+//   residential  50% downpayment, 40% progress billing, 10% at turnover
+//   company      30% downpayment, 60% progress billing (one billing or two),
+//                10% at turnover
+// The 10% is the last cut of the contract, collected once turnover is done.
+export const FINAL_PAYMENT_RATE = 0.1;
+
+// Statuses from which MDP can bill the final 10%: the work is installed and
+// being turned over, or the order is complete.
+export const TURNOVER_STATUSES = ["ready_for_delivery", "completed"];
 
 export function isPureCustom(order) {
   return order?.orderType === "pure_custom";
@@ -416,6 +425,169 @@ export async function adminCloseUnpaidOrder(orderId) {
   } catch (err) {
     console.error("Failed to post order-closed system message:", err);
   }
+}
+
+// ---------- Progress billings and the final 10% ----------
+// order.billings is a small array only MDP can write (Firestore rules stop a
+// customer's update from touching it):
+//   { id, kind: "progress" | "final", label, amount, note, issuedAt (ISO),
+//     paidAt (ISO | null), paidBy }
+// A customer pays by saving a "billing_payment" receipt that carries the
+// billing's id (lib/receipts.js). MDP then marks the billing paid, which also
+// locks those receipts.
+
+// How the contract splits, from the CURRENT payable total (a raise or deduction
+// from an accepted change shows up in the progress pool, never in the 10%).
+export function getBillingPlan(order) {
+  const base = order.finalPrice ?? order.provisionalTotal ?? 0;
+  const payable = base + (order.adjustmentsTotal || 0);
+  const depositRate = getDepositRate(order);
+  const rawDeposit = order.finalDepositAmount ?? order.depositAmount ?? 0;
+  const deposit =
+    (order.adjustmentsTotal || 0) < 0
+      ? Math.min(rawDeposit, Math.round(payable * depositRate))
+      : rawDeposit;
+  const finalAmount = Math.round(payable * FINAL_PAYMENT_RATE);
+  const progressPool = Math.max(0, payable - deposit - finalAmount);
+  const billings = order.billings || [];
+  const progressIssued = billings
+    .filter((b) => b.kind === "progress")
+    .reduce((n, b) => n + (Number(b.amount) || 0), 0);
+  const progressPaid = billings
+    .filter((b) => b.kind === "progress" && b.paidAt)
+    .reduce((n, b) => n + (Number(b.amount) || 0), 0);
+  const finalBilling = billings.find((b) => b.kind === "final") || null;
+  return {
+    payable,
+    deposit,
+    depositPercent: Math.round(depositRate * 100),
+    progressPool,
+    progressPercent: Math.round((1 - depositRate - FINAL_PAYMENT_RATE) * 100),
+    progressIssued,
+    progressPaid,
+    progressToIssue: Math.max(0, progressPool - progressIssued),
+    finalAmount,
+    finalBilling,
+    finalPaid: Boolean(finalBilling?.paidAt),
+    finalPercent: Math.round(FINAL_PAYMENT_RATE * 100),
+  };
+}
+
+// Shown state of one billing, given the receipts on the order.
+export function getBillingState(billing, receipts = []) {
+  if (billing.paidAt) return "paid";
+  const sent = receipts.some((r) => r.kind === "billing_payment" && r.billingId === billing.id);
+  return sent ? "submitted" : "issued";
+}
+
+export const BILLING_STATE_LABELS = {
+  issued: "Awaiting payment",
+  submitted: "Payment sent, being verified",
+  paid: "Paid",
+};
+
+function peso(n) {
+  return "\u20b1" + Math.round(n).toLocaleString();
+}
+
+// MDP issues a bill. Progress billings can't exceed the progress pool; the
+// final billing (one per order) is only available at turnover.
+export async function issueBilling(orderId, { kind, label, amount, note = "" }) {
+  const ref = doc(db, COLLECTION, orderId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) throw new Error("Order not found.");
+  const order = { id: snap.id, ...snap.data() };
+  if (!order.depositConfirmed) {
+    throw new Error("Verify the downpayment first. Billing starts after it.");
+  }
+  if (order.status === "cancelled" || order.status === "rejected") {
+    throw new Error("This order is closed.");
+  }
+  const amt = Math.round(Number(amount) || 0);
+  if (amt <= 0) throw new Error("Enter the amount to bill.");
+  const plan = getBillingPlan(order);
+
+  if (kind === "progress") {
+    if (amt > plan.progressToIssue) {
+      throw new Error(
+        `Only ${peso(plan.progressToIssue)} of the ${plan.progressPercent}% progress billing is left to bill.`
+      );
+    }
+  } else if (kind === "final") {
+    if (plan.finalBilling) throw new Error("The final billing was already issued.");
+    if (!TURNOVER_STATUSES.includes(order.status)) {
+      throw new Error("The final 10% is billed at turnover. Move the order to Ready for Delivery first.");
+    }
+  } else {
+    throw new Error("Unknown billing type.");
+  }
+
+  const billing = {
+    id: localId(),
+    kind,
+    label: (label || "").trim() || (kind === "final" ? "Final payment (10% at turnover)" : "Progress billing"),
+    amount: amt,
+    note: note.trim(),
+    issuedAt: new Date().toISOString(),
+    paidAt: null,
+    paidBy: null,
+  };
+  await updateDoc(ref, {
+    billings: [...(order.billings || []), billing],
+    updatedAt: serverTimestamp(),
+  });
+
+  try {
+    await sendSystemMessage(
+      orderId,
+      kind === "final"
+        ? `Your order is at turnover. The final payment of ${peso(amt)} (the last ${plan.finalPercent}% of the contract) is now due. Pay it from the Billing card on your order page.`
+        : `A progress billing of ${peso(amt)} (${billing.label}) was issued. Pay it from the Billing card on your order page.`
+    );
+  } catch (err) {
+    console.error("Failed to post billing system message:", err);
+  }
+  return billing;
+}
+
+// MDP verifies (or un-verifies) the payment for one billing.
+export async function setBillingPaid(orderId, billingId, paid, adminUid) {
+  const ref = doc(db, COLLECTION, orderId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) throw new Error("Order not found.");
+  const billings = (snap.data().billings || []).map((b) =>
+    b.id === billingId
+      ? { ...b, paidAt: paid ? new Date().toISOString() : null, paidBy: paid ? adminUid : null }
+      : b
+  );
+  await updateDoc(ref, { billings, updatedAt: serverTimestamp() });
+  const b = billings.find((x) => x.id === billingId);
+  if (paid && b) {
+    try {
+      await sendSystemMessage(
+        orderId,
+        b.kind === "final"
+          ? `\u2713 Your final payment of ${peso(b.amount)} was received and verified. Thank you!`
+          : `\u2713 Your payment of ${peso(b.amount)} (${b.label}) was received and verified.`
+      );
+    } catch (err) {
+      console.error("Failed to post billing-paid system message:", err);
+    }
+  }
+}
+
+// Remove a bill that was issued by mistake. Only before any payment is
+// attached to it.
+export async function deleteBilling(orderId, billingId) {
+  const ref = doc(db, COLLECTION, orderId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) throw new Error("Order not found.");
+  const target = (snap.data().billings || []).find((b) => b.id === billingId);
+  if (target?.paidAt) throw new Error("This billing is already paid.");
+  await updateDoc(ref, {
+    billings: (snap.data().billings || []).filter((b) => b.id !== billingId),
+    updatedAt: serverTimestamp(),
+  });
 }
 
 // Only cancellable before a deposit is submitted — once approved (or
