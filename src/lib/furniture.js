@@ -35,6 +35,16 @@ export async function getAllFurniture() {
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 }
 
+// Same product already saved? Case and extra spaces are ignored, and the same
+// name in a different category is allowed. `exceptId` skips the item being edited.
+const normName = (s) => String(s || "").trim().replace(/\s+/g, " ").toLowerCase();
+export async function findDuplicateFurniture(name, categoryId, exceptId = null) {
+  const snap = await getDocs(query(collection(db, COLLECTION), where("categoryId", "==", categoryId)));
+  const target = normName(name);
+  const hit = snap.docs.find((d) => d.id !== exceptId && normName(d.data().name) === target);
+  return hit ? { id: hit.id, ...hit.data() } : null;
+}
+
 // --- Admin CRUD ---
 
 export async function createFurniture(data) {

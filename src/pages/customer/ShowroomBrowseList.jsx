@@ -9,6 +9,15 @@ import { getFurnitureByCategory } from "../../lib/furniture";
 
 const SHAPE_FILTERS = ["Straight", "L-Shape", "U-Shape", "Island"];
 
+// Furniture documents store their shapes in sizeOptions: [{ type, price }]
+// (see ShowroomForm). They have no top-level shapeType field, so the filter
+// has to look inside sizeOptions or it matches nothing.
+function itemShapes(item) {
+  const fromOptions = (item.sizeOptions || []).map((s) => s.type).filter(Boolean);
+  if (item.shapeType) fromOptions.push(item.shapeType);
+  return fromOptions;
+}
+
 export default function ShowroomBrowseList() {
   const { categoryId } = useParams();
   const [category, setCategory] = useState(null);
@@ -44,11 +53,10 @@ export default function ShowroomBrowseList() {
     };
   }, [categoryId]);
 
+  const needle = search.trim().toLowerCase();
   const filtered = furniture.filter((item) => {
-    const matchesSearch = item.name
-      .toLowerCase()
-      .includes(search.toLowerCase());
-    const matchesShape = !activeShape || item.shapeType === activeShape;
+    const matchesSearch = !needle || String(item.name || "").toLowerCase().includes(needle);
+    const matchesShape = !activeShape || itemShapes(item).includes(activeShape);
     return matchesSearch && matchesShape;
   });
 
@@ -67,9 +75,7 @@ export default function ShowroomBrowseList() {
         <StepProgress currentStep={2} />
 
         <h1>{category?.name || "Browse"}</h1>
-        <p className="showroom-subtitle">
-          {category?.description}
-        </p>
+        <p className="showroom-subtitle">{category?.description}</p>
 
         <div className="browse-toolbar">
           <input
@@ -83,12 +89,10 @@ export default function ShowroomBrowseList() {
             {SHAPE_FILTERS.map((shape) => (
               <button
                 key={shape}
-                className={
-                  "shape-pill" + (activeShape === shape ? " shape-pill-active" : "")
-                }
-                onClick={() =>
-                  setActiveShape(activeShape === shape ? null : shape)
-                }
+                type="button"
+                className={"shape-pill" + (activeShape === shape ? " shape-pill-active" : "")}
+                aria-pressed={activeShape === shape}
+                onClick={() => setActiveShape(activeShape === shape ? null : shape)}
               >
                 {shape}
               </button>

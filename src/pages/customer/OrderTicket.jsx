@@ -9,6 +9,7 @@ import ReceiptsPanel from "../../components/ReceiptsPanel";
 import BillingPanel from "../../components/BillingPanel";
 import QuoteFiles from "../../components/QuoteFiles";
 import ChangeRequestFiles from "../../components/ChangeRequestFiles";
+import { checkImageFiles, friendlyError } from "../../lib/validators";
 import { sendMessage, validateAttachments, ALLOWED_EXTENSIONS, MAX_FILES_PER_SEND } from "../../lib/messages";
 import { useUnread } from "../../lib/chatPresence";
 import { getPaymentSummary } from "../../lib/refunds";
@@ -130,16 +131,18 @@ export default function OrderTicket() {
     }
   }, [location.search]);
 
-  function handleProofFilesChange(e) {
+  async function handleProofFilesChange(e) {
     const picked = Array.from(e.target.files || []);
     e.target.value = "";
     if (!picked.length) return;
-    if (picked.some((f) => !f.type.startsWith("image/"))) {
-      setProofError("Please attach images (screenshots or photos) only.");
-      return;
-    }
     if (proofFiles.length + picked.length > MAX_RECEIPT_FILES) {
       setProofError(`You can attach up to ${MAX_RECEIPT_FILES} screenshots.`);
+      return;
+    }
+    // Type, size and "is this a real, readable picture" checks.
+    const problem = await checkImageFiles(picked);
+    if (problem) {
+      setProofError(problem);
       return;
     }
     setProofError("");
@@ -212,9 +215,17 @@ export default function OrderTicket() {
     setActionBusy(true);
     try {
       await cancelOrder(orderId);
+    } catch (err) {
+      console.error("cancelOrder failed:", err);
+      alert("Couldn't cancel this order. " + friendlyError(err, "Please try again."));
+      setActionBusy(false);
+      return;
+    }
+    // The cancel itself worked; a failed refresh must not look like a failed cancel.
+    try {
       await load();
     } catch (err) {
-      alert("Something went wrong. Please try again.");
+      console.error("reload after cancel failed:", err);
     } finally {
       setActionBusy(false);
     }
@@ -524,24 +535,18 @@ export default function OrderTicket() {
                       <td>₱{c.subtotal.toLocaleString()}</td>
                     </tr>
                   ))}
-                  {/* Older orders were created with a 10% hardware & installation
-                      fee. New orders have none, so this row only appears when
-                      the stored total is higher than the items. */}
-                  {!isPureCustom(order) &&
-                    order.provisionalTotal -
-                      order.configurations.reduce((s, c) => s + c.subtotal, 0) >
-                      0 && (
-                      <tr>
-                        <td>Hardware &amp; installation</td>
-                        <td>
-                          ₱
-                          {(
-                            order.provisionalTotal -
-                            order.configurations.reduce((s, c) => s + c.subtotal, 0)
-                          ).toLocaleString()}
-                        </td>
-                      </tr>
-                    )}
+                  {!isPureCustom(order) && (
+                  <tr>
+                    <td>Hardware &amp; installation</td>
+                    <td>
+                      ₱
+                      {(
+                        order.provisionalTotal -
+                        order.configurations.reduce((s, c) => s + c.subtotal, 0)
+                      ).toLocaleString()}
+                    </td>
+                  </tr>
+                  )}
                   <tr className="ticket-price-total-row">
                     <td>
                       {order.finalPrice

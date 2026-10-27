@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { checkImageFiles } from "../lib/validators";
 import ProofImage from "./ProofImage";
 import { getPaymentSummary } from "../lib/refunds";
 import {
@@ -52,16 +53,17 @@ function ReceiptForm({ initial, allowedKinds, onSave, onCancel, busy, error }) {
   const total = keep.length + files.length;
   const showAmount = !isCustomerKind(kind);
 
-  function pick(e) {
+  async function pick(e) {
     const picked = Array.from(e.target.files || []);
     e.target.value = "";
     if (!picked.length) return;
-    if (picked.some((f) => !f.type.startsWith("image/"))) {
-      setLocalError("Receipts must be images (screenshots or photos).");
-      return;
-    }
     if (total + picked.length > MAX_RECEIPT_FILES) {
       setLocalError(`You can attach up to ${MAX_RECEIPT_FILES} images per receipt.`);
+      return;
+    }
+    const problem = await checkImageFiles(picked);
+    if (problem) {
+      setLocalError(problem);
       return;
     }
     setLocalError("");

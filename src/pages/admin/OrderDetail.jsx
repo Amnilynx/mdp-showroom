@@ -1,3 +1,4 @@
+import { checkFutureDate, todayISO } from "../../lib/validators";
 import { useEffect, useState } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import AdminLayout from "../../components/AdminLayout";
@@ -56,6 +57,22 @@ import { generateOrderReceipt } from "../../lib/invoicePdf";
 
 const ALL_STATUSES = [...ORDER_STATUSES, ...TERMINAL_STATUSES];
 
+// Turns a Firestore/Firebase error into text the admin can act on.
+function errMsg(err) {
+  const code = err?.code ? String(err.code).replace("firestore/", "") : "";
+  const hints = {
+    "permission-denied": "You don't have permission (are you signed in as a manager? Have the latest Firestore rules been published?).",
+    "unavailable": "Can't reach the server. Check the internet connection and try again.",
+    "unauthenticated": "Your session expired. Sign in again.",
+    "not-found": "This order no longer exists.",
+    "failed-precondition": "The database rejected the change (a required index or rule is missing).",
+    "deadline-exceeded": "The server took too long to answer.",
+    "resource-exhausted": "The database quota has been used up for now.",
+  };
+  const base = hints[code] || err?.message || "Unknown error.";
+  return code ? `${base} (${code})` : base;
+}
+
 export default function AdminOrderDetail() {
   const { orderId } = useParams();
   const { user, profile } = useAuth();
@@ -67,6 +84,7 @@ export default function AdminOrderDetail() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [statusDraft, setStatusDraft] = useState("");
+  const [statusMsg, setStatusMsg] = useState(null); // { type: "ok" | "error" | "wait", text }
   const [codeDraft, setCodeDraft] = useState("");
   const [noteDraft, setNoteDraft] = useState("");
   const [priceDraft, setPriceDraft] = useState("");
@@ -136,6 +154,18 @@ export default function AdminOrderDetail() {
   }, [location.search]);
 
   async function handleStatusUpdate() {
+    try {
+      await runStatusUpdate();
+    } catch (err) {
+      console.error(err);
+      setBusy(false);
+      setStatusMsg({ type: "error", text: "Couldn't update the status. " + errMsg(err) });
+    }
+  }
+
+  async function runStatusUpdate() {
+    setStatusMsg(null);
+    if (!order) return;
     if (statusDraft === order.status) return;
 
     // Cancelling or rejecting is a hard stop for the order — if a deposit
@@ -170,24 +200,43 @@ export default function AdminOrderDetail() {
     }
 
     setBusy(true);
+    setStatusMsg({ type: "wait", text: "Saving…" });
+    // If the save is still waiting after 12 s, say so instead of freezing
+    // silently (usually a dropped connection; the change is queued and will
+    // apply once the connection returns).
+    const slow = setTimeout(
+      () =>
+        setStatusMsg({
+          type: "wait",
+          text: "Still saving… this is taking longer than usual. Check your internet connection. The change is queued and will apply when you're back online.",
+        }),
+      12000
+    );
     try {
       await updateOrderStatus(orderId, statusDraft);
-      await load();
+      setStatusMsg({ type: "ok", text: `Status updated to "${STATUS_LABELS[statusDraft] || statusDraft}".` });
     } catch (err) {
-      alert("Failed to update status.");
+      console.error("updateOrderStatus failed:", err);
+      setStatusMsg({ type: "error", text: "Couldn't update the status. " + errMsg(err) });
     } finally {
+      clearTimeout(slow);
       setBusy(false);
     }
   }
 
   async function handleAssignCode() {
-    if (!codeDraft.trim()) return;
+    const code = codeDraft.trim().toUpperCase();
+    if (!code) return;
+    if (!/^[A-Z0-9][A-Z0-9-]{1,18}[A-Z0-9]$/.test(code)) {
+      alert("The order code must be 3 to 20 characters: letters, numbers and dashes only, like CR-701.");
+      return;
+    }
     setBusy(true);
     try {
-      await assignOrderCode(orderId, codeDraft.trim());
+      await assignOrderCode(orderId, code);
       await load();
     } catch (err) {
-      alert("Failed to assign order code.");
+      alert(`Failed to assign order code. ${errMsg(err)}`);
     } finally {
       setBusy(false);
     }
@@ -195,12 +244,14 @@ export default function AdminOrderDetail() {
 
   async function handleConfirmVisit() {
     if (!visitDateDraft) return;
+    const dateProblem = checkFutureDate(visitDateDraft, "site visit date");
+    if (dateProblem) { alert(dateProblem); return; }
     setBusy(true);
     try {
       await confirmSiteVisit(orderId, visitDateDraft);
       await load();
     } catch (err) {
-      alert("Failed to confirm site visit date.");
+      alert(`Failed to confirm site visit date. ${errMsg(err)}`);
     } finally {
       setBusy(false);
     }
@@ -213,7 +264,7 @@ export default function AdminOrderDetail() {
       setVisitDateDraft("");
       await load();
     } catch (err) {
-      alert("Failed to clear site visit date.");
+      alert(`Failed to clear site visit date. ${errMsg(err)}`);
     } finally {
       setBusy(false);
     }
@@ -221,12 +272,14 @@ export default function AdminOrderDetail() {
 
   async function handleScheduleDelivery() {
     if (!deliveryDateDraft) return;
+    const dateProblem = checkFutureDate(deliveryDateDraft, "delivery date");
+    if (dateProblem) { alert(dateProblem); return; }
     setBusy(true);
     try {
       await scheduleDelivery(orderId, deliveryDateDraft);
       await load();
     } catch (err) {
-      alert("Failed to schedule delivery.");
+      alert(`Failed to schedule delivery. ${errMsg(err)}`);
     } finally {
       setBusy(false);
     }
@@ -239,7 +292,7 @@ export default function AdminOrderDetail() {
       setDeliveryDateDraft("");
       await load();
     } catch (err) {
-      alert("Failed to clear delivery date.");
+      alert(`Failed to clear delivery date. ${errMsg(err)}`);
     } finally {
       setBusy(false);
     }
@@ -254,7 +307,7 @@ export default function AdminOrderDetail() {
       setNoteDraft("");
       await load();
     } catch (err) {
-      alert("Failed to add note.");
+      alert(`Failed to add note. ${errMsg(err)}`);
     } finally {
       setBusy(false);
     }
@@ -312,7 +365,7 @@ export default function AdminOrderDetail() {
       }
       await load();
     } catch (err) {
-      alert("Failed to update deposit status.");
+      alert(`Failed to update deposit status. ${errMsg(err)}`);
     } finally {
       setBusy(false);
     }
@@ -366,8 +419,16 @@ export default function AdminOrderDetail() {
 
   async function handleIssueFinalPrice() {
     const price = Number(priceDraft);
-    if (!price || price <= 0) {
-      alert("Enter a valid price.");
+    if (String(priceDraft).trim() === "" || !Number.isFinite(price) || price <= 0) {
+      alert("Enter the final price as a number above 0.");
+      return;
+    }
+    if (price > 100000000) {
+      alert("That price looks too large. Check the number of zeros.");
+      return;
+    }
+    if (!Number.isInteger(price * 100)) {
+      alert("Use at most two decimal places for the price.");
       return;
     }
     if (quoteFiles.length === 0) {
@@ -457,7 +518,7 @@ export default function AdminOrderDetail() {
       setDeclineDrafts((d) => ({ ...d, [cr.id]: "" }));
       await load();
     } catch (err) {
-      alert("Failed to decline request.");
+      alert(`Failed to decline request. ${errMsg(err)}`);
     } finally {
       setCrBusy(null);
     }
@@ -781,6 +842,8 @@ export default function AdminOrderDetail() {
             <div className="inline-form-row">
               <input
                 type="number"
+                min="1"
+                step="0.01"
                 value={priceDraft}
                 onChange={(e) => setPriceDraft(e.target.value)}
                 disabled={order.status !== "request_received" && order.status !== "under_review"}
@@ -989,6 +1052,7 @@ export default function AdminOrderDetail() {
             <div className="inline-form-row">
               <input
                 type="date"
+                min={todayISO()}
                 value={visitDateDraft}
                 onChange={(e) => setVisitDateDraft(e.target.value)}
               />
@@ -1026,6 +1090,7 @@ export default function AdminOrderDetail() {
             <div className="inline-form-row">
               <input
                 type="date"
+                min={todayISO()}
                 value={deliveryDateDraft}
                 onChange={(e) => setDeliveryDateDraft(e.target.value)}
               />
@@ -1064,6 +1129,7 @@ export default function AdminOrderDetail() {
               <input
                 placeholder="e.g. CR-701"
                 value={codeDraft}
+                maxLength={20}
                 onChange={(e) => setCodeDraft(e.target.value)}
               />
               <button
@@ -1117,6 +1183,22 @@ export default function AdminOrderDetail() {
                 ? `⚠ ${STATUS_LABELS[statusDraft]} This Order`
                 : "Update"}
             </button>
+            {statusMsg && (
+              <div
+                role={statusMsg.type === "error" ? "alert" : "status"}
+                style={{
+                  marginTop: 10,
+                  padding: "8px 12px",
+                  borderRadius: 6,
+                  fontSize: 14,
+                  background: statusMsg.type === "error" ? "#fde8e8" : statusMsg.type === "ok" ? "#e6f4ea" : "#fff6dd",
+                  color: statusMsg.type === "error" ? "#9b1c1c" : statusMsg.type === "ok" ? "#1e6b34" : "#7a5b00",
+                  border: "1px solid " + (statusMsg.type === "error" ? "#f5b5b5" : statusMsg.type === "ok" ? "#b7dfc2" : "#ecd48a"),
+                }}
+              >
+                {statusMsg.text}
+              </div>
+            )}
           </div>
         </div>
       </div>

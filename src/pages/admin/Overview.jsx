@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import AdminLayout from "../../components/AdminLayout";
+import StudioNote from "../../components/StudioNote";
 import { getAllOrders, STATUS_LABELS } from "../../lib/orders";
 
 export default function AdminOverview() {
@@ -107,16 +108,7 @@ export default function AdminOverview() {
         </div>
 
         <div className="overview-side-stack">
-          <div className="overview-note">
-            <p className="section-eyebrow-dark">STUDIO NOTE</p>
-            <textarea
-              placeholder="Jot a note for the team…"
-              className="studio-note-area"
-            />
-            <Link to="/admin/reports" className="btn btn-primary studio-note-btn">
-              Open Reports →
-            </Link>
-          </div>
+          <StudioNote />
         </div>
       </div>
     </AdminLayout>

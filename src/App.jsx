@@ -19,6 +19,7 @@ import QuoteRequest from "./pages/customer/QuoteRequest";
 import OrderTicket from "./pages/customer/OrderTicket";
 import MyOrders from "./pages/customer/MyOrders";
 import Privacy from "./pages/customer/Privacy";
+import Profile from "./pages/customer/Profile";
 
 // Admin pages
 import AdminOverview from "./pages/admin/Overview";
@@ -209,6 +210,14 @@ export default function App() {
               <ProtectedRoute role="manager">
                 <AdminPortfolioForm />
               </ProtectedRoute>
+            }
+          />
+          <Route
+          path="/profile"
+          element={
+            <ProtectedRoute>
+              <Profile />
+            </ProtectedRoute>
             }
           />
         </Routes>

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { checkImageFiles } from "../lib/validators";
 import {
   getBillingPlan,
   getBillingState,
@@ -116,16 +117,17 @@ export default function BillingPanel({ order, orderId, receipts = [], role, user
     }
   }
 
-  function pickFiles(e) {
+  async function pickFiles(e) {
     const picked = Array.from(e.target.files || []);
     e.target.value = "";
     if (!picked.length) return;
-    if (picked.some((f) => !f.type.startsWith("image/"))) {
-      setPayError("Please attach photos or screenshots only.");
-      return;
-    }
     if (files.length + picked.length > MAX_RECEIPT_FILES) {
       setPayError(`You can attach up to ${MAX_RECEIPT_FILES} photos.`);
+      return;
+    }
+    const problem = await checkImageFiles(picked);
+    if (problem) {
+      setPayError(problem);
       return;
     }
     setPayError("");

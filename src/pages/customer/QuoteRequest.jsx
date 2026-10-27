@@ -5,6 +5,9 @@ import Footer from "../../components/Footer";
 import Breadcrumb from "../../components/Breadcrumb";
 import StepProgress from "../../components/StepProgress";
 import { useAuth } from "../../context/AuthContext";
+import {
+  checkName, checkEmail, checkPhone, checkRequired, checkUrl, checkFutureDate, todayISO, friendlyError,
+} from "../../lib/validators";
 import { useCart } from "../../context/CartContext";
 import {
   createOrder,
@@ -43,6 +46,21 @@ export default function QuoteRequest() {
   async function handleSubmit(e) {
     e.preventDefault();
     setError("");
+
+    // Check every field first, so the person sees what to fix instead of a
+    // request being accepted with missing or invalid details.
+    const fieldProblem =
+      checkName(contactName, "name") ||
+      checkEmail(contactEmail) ||
+      checkPhone(contactNumber) ||
+      checkRequired(location, "the location (city or province)", 2) ||
+      checkRequired(siteAddress, "the site address", 8) ||
+      checkFutureDate(preferredVisitDate, "site visit date", { required: true }) ||
+      checkUrl(floorPlanUrl);
+    if (fieldProblem) {
+      setError(fieldProblem);
+      return;
+    }
 
     if (pureCustom) {
       if (!companyName.trim()) {
@@ -98,7 +116,7 @@ export default function QuoteRequest() {
       if (!pureCustom) clearCart();
       navigate(`/orders/${orderId}`);
     } catch (err) {
-      setError("Something went wrong submitting your request. Please try again.");
+      setError("We couldn't submit your request. " + friendlyError(err, "Please try again."));
     } finally {
       setSubmitting(false);
     }
@@ -222,7 +240,7 @@ export default function QuoteRequest() {
           </div>
 
           {/* Right: inquiry details form */}
-          <form className="quote-right" onSubmit={handleSubmit}>
+          <form className="quote-right" onSubmit={handleSubmit} noValidate>
             <h4>Inquiry Details:</h4>
 
             {pureCustom && (
@@ -261,9 +279,11 @@ export default function QuoteRequest() {
               Contact Number
               <input
                 type="tel"
+                inputMode="tel"
                 value={contactNumber}
                 onChange={(e) => setContactNumber(e.target.value)}
-                placeholder="+63 9XX XXX XXXX"
+                placeholder="0917 123 4567"
+                required
               />
             </label>
 
@@ -273,6 +293,7 @@ export default function QuoteRequest() {
                 value={location}
                 onChange={(e) => setLocation(e.target.value)}
                 placeholder="e.g. Metro Manila"
+                required
               />
             </label>
 
@@ -282,6 +303,7 @@ export default function QuoteRequest() {
                 value={siteAddress}
                 onChange={(e) => setSiteAddress(e.target.value)}
                 placeholder="Street, Barangay, City"
+                required
               />
             </label>
 
@@ -289,14 +311,17 @@ export default function QuoteRequest() {
               Preferred Site Visit Date
               <input
                 type="date"
+                min={todayISO()}
                 value={preferredVisitDate}
                 onChange={(e) => setPreferredVisitDate(e.target.value)}
+                required
               />
             </label>
 
             <label>
               Floor Plan / Space Photo URL (optional)
               <input
+                type="url"
                 value={floorPlanUrl}
                 onChange={(e) => setFloorPlanUrl(e.target.value)}
                 placeholder="https://…"

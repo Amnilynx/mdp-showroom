@@ -17,9 +17,11 @@ import { sendSystemMessage } from "./messages";
 
 const COLLECTION = "orders";
 
-// The 10% hardware & installation fee was removed: quotes are just the sum of
-// the items. Kept at 0 only so any older import still resolves.
-export const HARDWARE_INSTALLATION_RATE = 0;
+// Fallback only — the live, admin-adjustable rate lives in Firestore
+// (settings/general.hardwareInstallationRate, see lib/settings.js).
+// Pages fetch the live value via getSettings() and fall back to this
+// constant if that doc doesn't exist yet or fails to load.
+export const HARDWARE_INSTALLATION_RATE = 0.10;
 
 // Where to send manual payments. MDP takes payments by bank deposit only
 // (confirmed in Interviews 1 and 2), so the bank is the one and only method.
@@ -232,18 +234,16 @@ export async function updateOrderStatus(orderId, newStatus) {
     updatedAt: serverTimestamp(),
   });
 
-  // Let the customer know their order moved, without them needing to
-  // keep checking back. Posted into the same thread as Messages.
-  try {
-    await sendSystemMessage(
-      orderId,
-      `Your order status changed to "${STATUS_LABELS[newStatus] || newStatus}".`
-    );
-  } catch (err) {
-    // Status change itself already succeeded above — don't fail the whole
-    // action just because the notification message couldn't be posted.
+  // Let the customer know their order moved. Posted into the same thread as
+  // Messages. Deliberately NOT awaited: the status change already succeeded,
+  // and waiting on this second write is what made the button hang whenever
+  // the connection was slow.
+  sendSystemMessage(
+    orderId,
+    `Your order status changed to "${STATUS_LABELS[newStatus] || newStatus}".`
+  ).catch((err) => {
     console.error("Failed to post status-change system message:", err);
-  }
+  });
 }
 
 // Admin manually assigns the human-readable code (e.g. "CR-701")

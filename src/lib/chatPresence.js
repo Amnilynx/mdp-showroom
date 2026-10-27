@@ -16,6 +16,7 @@ function emit() {
 export function markChatOpen(orderId) {
   open.set(orderId, (open.get(orderId) || 0) + 1);
   clearUnread(orderId); // looking at it = read
+  markRead(orderId);
 }
 
 export function markChatClosed(orderId) {
@@ -54,6 +55,96 @@ export function getUnreadInquiries() {
     if (String(k).startsWith("inq_")) n += v;
   });
   return n;
+}
+
+// ---------------------------------------------------------------------
+// "Needs a look" flags: the red dots on the admin Orders / Inquiries tabs
+// and on each order row. Unlike `unread` above (this session only, and
+// only for messages that arrive while the page is open), these are worked
+// out from the data itself, so they are right straight after sign-in:
+// a thread is flagged when its latest message came from the OTHER side
+// and is newer than the last time this browser opened that chat. The
+// "last opened" times are kept in localStorage per signed-in user.
+// ChatNotifier feeds noteThread() from its Firestore listeners.
+const attention = new Set(); // thread keys that need a look
+const lastSeen = new Map(); // thread key -> time of its latest message (ms)
+let readUid = null;
+let readMap = {}; // thread key -> time of the latest message already read
+
+const storeKey = () => "mdp.chatRead." + readUid;
+const isInquiryKey = (k) => String(k).startsWith("inq_");
+
+function saveRead() {
+  try {
+    localStorage.setItem(storeKey(), JSON.stringify(readMap));
+  } catch {
+    /* private mode or storage full: dots just won't survive a reload */
+  }
+}
+
+export function initAttention(uid) {
+  readUid = uid;
+  try {
+    readMap = JSON.parse(localStorage.getItem(storeKey()) || "{}") || {};
+  } catch {
+    readMap = {};
+  }
+  attention.clear();
+  lastSeen.clear();
+  emit();
+}
+
+// fromOtherSide: the latest message was sent by the other party (customer
+// -> staff, or staff -> customer), not by the person looking at the screen.
+export function noteThread(key, ms, fromOtherSide) {
+  lastSeen.set(key, ms);
+  let flag = false;
+  if (fromOtherSide && ms) {
+    if (open.has(key)) {
+      readMap[key] = ms; // reading it live
+      saveRead();
+    } else {
+      flag = ms > (readMap[key] || 0);
+    }
+  }
+  const had = attention.has(key);
+  if (flag === had) return;
+  if (flag) attention.add(key);
+  else attention.delete(key);
+  emit();
+}
+
+export function forgetThread(key) {
+  lastSeen.delete(key);
+  if (attention.delete(key)) emit();
+}
+
+function markRead(key) {
+  const ms = lastSeen.get(key);
+  if (ms) {
+    readMap[key] = ms;
+    saveRead();
+  }
+  if (attention.delete(key)) emit();
+}
+
+const anyOrderAttention = () => {
+  for (const k of attention) if (!isInquiryKey(k)) return true;
+  return false;
+};
+const anyInquiryAttention = () => {
+  for (const k of attention) if (isInquiryKey(k)) return true;
+  return false;
+};
+
+export function useOrdersAttention() {
+  return useSyncExternalStore(subscribeUnread, anyOrderAttention, () => false);
+}
+export function useInquiriesAttention() {
+  return useSyncExternalStore(subscribeUnread, anyInquiryAttention, () => false);
+}
+export function useThreadAttention(key) {
+  return useSyncExternalStore(subscribeUnread, () => attention.has(key), () => false);
 }
 
 export function subscribeUnread(cb) {

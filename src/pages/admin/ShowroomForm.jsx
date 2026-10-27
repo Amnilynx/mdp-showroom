@@ -6,7 +6,9 @@ import {
   getFurnitureById,
   createFurniture,
   updateFurniture,
+  findDuplicateFurniture,
 } from "../../lib/furniture";
+import { checkUrl, friendlyError } from "../../lib/validators";
 import { NEWMIKA_SWATCHES, NEWMIKA_SITE_URL } from "../../lib/newmikaSwatches";
 
 const SHAPE_CHOICES = ["Straight", "L-Shape", "U-Shape", "Island"];
@@ -77,6 +79,7 @@ export default function AdminShowroomForm() {
   const [loading, setLoading] = useState(isEdit);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [errors, setErrors] = useState({}); // field key -> message, shown under each field
 
   const [name, setName] = useState("");
   const [categoryId, setCategoryId] = useState("");
@@ -166,6 +169,97 @@ export default function AdminShowroomForm() {
     };
   }, [isEdit, furnitureId]);
 
+  const clearErr = (...keys) =>
+    setErrors((prev) => {
+      if (!keys.some((k) => prev[k])) return prev;
+      const next = { ...prev };
+      keys.forEach((k) => delete next[k]);
+      return next;
+    });
+  const Err = ({ k }) =>
+    errors[k] ? (
+      <span role="alert" data-field-error style={{ color: "#9b1c1c", fontSize: 12, display: "block", marginTop: 4 }}>
+        {errors[k]}
+      </span>
+    ) : null;
+
+  // Checks every field and returns { fieldKey: message }. Empty object = all good.
+  function validateForm() {
+    const e = {};
+    const n = name.trim().replace(/\s+/g, " ");
+    if (n.length < 2 || n.length > 80) e.name = "Enter a name between 2 and 80 characters.";
+    else if (!/[A-Za-z0-9]/.test(n)) e.name = "The name must contain letters or numbers.";
+    if (!categoryId) e.categoryId = "Choose a category.";
+    if (!imageUrl.trim()) e.imageUrl = "Add the main photo link. Customers see this picture.";
+    else {
+      const u = checkUrl(imageUrl);
+      if (u) e.imageUrl = u;
+    }
+    const d = description.trim();
+    if (d.length < 10) e.description = "Write a short description (at least 10 characters).";
+    else if (d.length > 1000) e.description = "Keep the description under 1000 characters.";
+    for (const [key, label, raw] of [["materials", "Materials", materials], ["colors", "Colors", colors]]) {
+      const parts = raw.split(",").map((x) => x.trim()).filter(Boolean);
+      if (parts.length > 15) e[key] = `${label}: list at most 15 items.`;
+      else if (parts.some((x) => x.length > 40)) e[key] = `${label}: each item must be 40 characters or fewer.`;
+    }
+    const money = (v) => {
+      const t = String(v ?? "").trim();
+      if (t === "") return null;
+      const x = Number(t);
+      return Number.isFinite(x) ? x : NaN;
+    };
+    // sizes
+    const sizeMsgs = [];
+    const seenShapes = new Set();
+    if (sizeOptions.filter((o) => o.type).length === 0) sizeMsgs.push("Add at least one shape with a price.");
+    sizeOptions.forEach((o, i) => {
+      const p = money(o.price);
+      if (p === null) sizeMsgs.push(`Row ${i + 1} (${o.type}): enter a price.`);
+      else if (Number.isNaN(p) || p <= 0) sizeMsgs.push(`Row ${i + 1} (${o.type}): the price must be a number above 0.`);
+      else if (p > 10000000) sizeMsgs.push(`Row ${i + 1} (${o.type}): that price looks too large.`);
+      if (seenShapes.has(o.type)) sizeMsgs.push(`${o.type} is listed twice. Each shape can appear once.`);
+      seenShapes.add(o.type);
+    });
+    if (sizeMsgs.length) e.sizes = sizeMsgs.join(" ");
+    // finishes / hardware
+    const checkList = (list, label, needOne) => {
+      const msgs = [];
+      const seen = new Set();
+      const filled = list.filter((o) => o.name?.trim());
+      if (needOne && filled.length === 0) msgs.push(`Add at least one ${label} option.`);
+      list.forEach((o, i) => {
+        const nm = o.name?.trim() || "";
+        const p = money(o.price);
+        const hasOther = (p !== null && String(o.price).trim() !== "") || o.swatchImageUrl?.trim();
+        if (!nm && hasOther) msgs.push(`Row ${i + 1}: add a name for this ${label} option, or clear the row.`);
+        if (nm.length > 60) msgs.push(`Row ${i + 1}: the name is too long (60 characters max).`);
+        if (nm && (Number.isNaN(p) || (p !== null && p < 0))) msgs.push(`Row ${i + 1} (${nm}): the add-on price must be 0 or more.`);
+        if (nm && p !== null && p > 10000000) msgs.push(`Row ${i + 1} (${nm}): that price looks too large.`);
+        if (nm && o.swatchImageUrl?.trim()) {
+          const u = checkUrl(o.swatchImageUrl);
+          if (u) msgs.push(`Row ${i + 1} (${nm}): the swatch photo link isn't valid.`);
+        }
+        const k = nm.toLowerCase();
+        if (nm && seen.has(k)) msgs.push(`"${nm}" is listed twice.`);
+        if (nm) seen.add(k);
+      });
+      return msgs.join(" ");
+    };
+    const f = checkList(finishOptions, "finish", true);
+    if (f) e.finishes = f;
+    const h = checkList(hardwareOptions, "hardware", false);
+    if (h) e.hardware = h;
+    // dimensions
+    const dims = [["Width", defaultW], ["Depth", defaultD], ["Height", defaultH]];
+    const bad = dims.filter(([, v]) => {
+      const x = Number(String(v).trim());
+      return String(v).trim() === "" || !Number.isFinite(x) || x <= 0 || x > 2000;
+    });
+    if (bad.length) e.dims = `${bad.map(([l]) => l).join(", ")}: enter a number from 1 to 2000 (centimetres).`;
+    return e;
+  }
+
   function updateListItem(list, setList, index, field, value) {
     const next = [...list];
     next[index] = { ...next[index], [field]: value };
@@ -196,13 +290,23 @@ export default function AdminShowroomForm() {
     e.preventDefault();
     setError("");
 
-    if (!name.trim() || !categoryId) {
-      setError("Name and category are required.");
+    const errs = validateForm();
+    setErrors(errs);
+    if (Object.keys(errs).length) {
+      setError("Please fix the highlighted fields below.");
+      setTimeout(() => document.querySelector("[data-field-error]")?.scrollIntoView({ behavior: "smooth", block: "center" }), 0);
       return;
     }
 
     setSaving(true);
     try {
+      const dup = await findDuplicateFurniture(name, categoryId, isEdit ? furnitureId : null);
+      if (dup) {
+        setErrors({ name: `"${dup.name}" already exists in this category. Edit that item instead, or give this one a different name.` });
+        setError("Please fix the highlighted fields below.");
+        setSaving(false);
+        return;
+      }
       const payload = {
         name: name.trim(),
         categoryId,
@@ -246,7 +350,7 @@ export default function AdminShowroomForm() {
       }
       navigate("/admin/showroom");
     } catch (err) {
-      setError("Failed to save. Please try again.");
+      setError("Failed to save. " + friendlyError(err, "Please try again."));
     } finally {
       setSaving(false);
     }
@@ -262,23 +366,25 @@ export default function AdminShowroomForm() {
 
   return (
     <AdminLayout title={isEdit ? "Edit Furniture" : "Add Furniture"}>
-      <form className="admin-form" onSubmit={handleSubmit}>
-        {error && <p className="form-error">{error}</p>}
+      <form className="admin-form" onSubmit={handleSubmit} noValidate>
+        {error && <p className="form-error" role="alert">{error}</p>}
 
         <div className="admin-form-grid">
           <label>
             Name
-            <input value={name} onChange={(e) => setName(e.target.value)} required />
+            <input value={name} onChange={(e) => { setName(e.target.value); clearErr("name"); }} required maxLength={80} />
+            <Err k="name" />
           </label>
           <label>
             Category
-            <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
+            <select value={categoryId} onChange={(e) => { setCategoryId(e.target.value); clearErr("categoryId", "name"); }}>
               {categories.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
                 </option>
               ))}
             </select>
+            <Err k="categoryId" />
           </label>
         </div>
 
@@ -286,9 +392,10 @@ export default function AdminShowroomForm() {
           Image URL (default photo)
           <input
             value={imageUrl}
-            onChange={(e) => setImageUrl(e.target.value)}
+            onChange={(e) => { setImageUrl(e.target.value); clearErr("imageUrl"); }}
             placeholder="https://…"
           />
+          <Err k="imageUrl" />
           <span className="field-hint">
             This is the photo shown for this piece — it stays the same no
             matter which finish a customer picks below.
@@ -299,9 +406,11 @@ export default function AdminShowroomForm() {
           Description
           <textarea
             value={description}
-            onChange={(e) => setDescription(e.target.value)}
+            onChange={(e) => { setDescription(e.target.value); clearErr("description"); }}
             rows={3}
+            maxLength={1000}
           />
+          <Err k="description" />
         </label>
 
         <div className="admin-form-grid">
@@ -309,23 +418,26 @@ export default function AdminShowroomForm() {
             Materials (comma-separated)
             <input
               value={materials}
-              onChange={(e) => setMaterials(e.target.value)}
+              onChange={(e) => { setMaterials(e.target.value); clearErr("materials"); }}
               placeholder="Plywood, HPL Doors"
             />
+            <Err k="materials" />
           </label>
           <label>
             Colors (comma-separated)
             <input
               value={colors}
-              onChange={(e) => setColors(e.target.value)}
+              onChange={(e) => { setColors(e.target.value); clearErr("colors"); }}
               placeholder="White, Dark Walnut"
             />
+            <Err k="colors" />
           </label>
         </div>
 
         {/* Size / shape options with pricing */}
         <fieldset className="admin-fieldset">
           <legend>Size / Shape options &amp; price</legend>
+          <Err k="sizes" />
           {sizeOptions.map((opt, i) => (
             <div className="option-row" key={i}>
               <select
@@ -342,6 +454,7 @@ export default function AdminShowroomForm() {
               </select>
               <input
                 type="number"
+                min="1"
                 placeholder="Price (₱)"
                 value={opt.price}
                 onChange={(e) =>
@@ -377,6 +490,7 @@ export default function AdminShowroomForm() {
             piece in multiple finishes. See ShowroomCustomize.jsx. */}
         <fieldset className="admin-fieldset">
           <legend>Finish / Material options &amp; add-on price</legend>
+          <Err k="finishes" />
           {finishOptions.map((opt, i) => (
             <div className="option-row option-row-with-image" key={i}>
               <div className="option-row-fields">
@@ -504,6 +618,7 @@ export default function AdminShowroomForm() {
         {/* Hardware options */}
         <fieldset className="admin-fieldset">
           <legend>Hardware / Edges options &amp; add-on price</legend>
+          <Err k="hardware" />
           {hardwareOptions.map((opt, i) => (
             <div className="option-row" key={i}>
               <input
@@ -543,6 +658,7 @@ export default function AdminShowroomForm() {
 
         <fieldset className="admin-fieldset">
           <legend>Default dimensions (cm)</legend>
+          <Err k="dims" />
           <div className="admin-form-grid admin-form-grid-3">
             <label>
               Width

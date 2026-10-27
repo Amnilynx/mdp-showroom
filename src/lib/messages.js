@@ -6,6 +6,8 @@ import {
   setDoc,
   updateDoc,
   getDoc,
+  getDocs,
+  limit,
   writeBatch,
   query,
   orderBy,
@@ -49,6 +51,8 @@ const CHUNK_CHARS = 700000; // base64 characters per chunk, safely < 1 MiB
 // stored at inquiries/{uid}). Everything below works on either, so the
 // same ChatThread / attachments / notifier code serves both.
 export const INQUIRY_PREFIX = "inq_";
+// Posted automatically right after a customer's FIRST message in an inquiry.
+export const INQUIRY_WELCOME_TEXT = "Welcome to MDP, we'll get to you shortly.";
 export const inquiryThreadId = (uid) => INQUIRY_PREFIX + uid;
 export const isInquiryThread = (id) => String(id).startsWith(INQUIRY_PREFIX);
 
@@ -217,6 +221,20 @@ export async function sendMessage(
 ) {
   const list = [...(files.length ? files : file ? [file] : [])];
 
+  // First message in a pre-order inquiry? Checked before writing so the
+  // welcome reply can follow it. (Reads the messages list rather than the
+  // inquiry doc: the doc does not exist yet and the rules only let a
+  // customer read a doc that is already theirs.)
+  let firstInquiryMessage = false;
+  if (isInquiryThread(orderId) && senderRole === "customer") {
+    try {
+      const existing = await getDocs(query(messagesCollection(orderId), limit(1)));
+      firstInquiryMessage = existing.empty;
+    } catch (err) {
+      console.error("Couldn't check for earlier inquiry messages:", err);
+    }
+  }
+
   // Pre-generate the message id so chunks can be written under it first.
   const msgRef = doc(messagesCollection(orderId));
   let attachments = [];
@@ -278,6 +296,25 @@ export async function sendMessage(
     }
   } catch (err) {
     console.error("Failed to stamp last message on order:", err);
+  }
+
+  // Automatic welcome after the customer's first inquiry message. Stored as
+  // a "system" message (centered, muted in ChatThread). senderId stays the
+  // customer's uid because the security rules only let a customer write
+  // messages under their own uid; it does NOT stamp lastMessage*, so the
+  // owners' alert still points at the customer's real message.
+  if (firstInquiryMessage) {
+    try {
+      await addDoc(messagesCollection(orderId), {
+        senderId,
+        senderRole: "system",
+        senderName: "MDP Modular Systems",
+        text: INQUIRY_WELCOME_TEXT,
+        createdAt: serverTimestamp(),
+      });
+    } catch (err) {
+      console.error("Failed to post the inquiry welcome message:", err);
+    }
   }
 
   // Callers that need to point back at this message (e.g. quote files

@@ -3,6 +3,9 @@ import { Link, useNavigate } from "react-router-dom";
 import {
   signInWithEmailAndPassword,
   signInWithPopup,
+  setPersistence,
+  browserSessionPersistence,
+  browserLocalPersistence,
 } from "firebase/auth";
 import { auth, googleProvider } from "../../lib/firebase";
 import { ensureUserProfile, getUserProfile } from "../../lib/users";
@@ -14,6 +17,9 @@ import {
 import { useAuth } from "../../context/AuthContext";
 import Navbar from "../../components/Navbar";
 import Footer from "../../components/Footer";
+import { isStaffEmail } from "../../lib/staffEmails";
+import { markSignInStarted } from "../../context/AuthContext";
+import PasswordInput from "../../components/PasswordInput";
 
 export default function Login() {
   const navigate = useNavigate();
@@ -63,6 +69,12 @@ export default function Login() {
 
     setBusy(true);
     try {
+      // Admin / owner accounts stay signed in for THIS TAB ONLY: closing the tab
+      // or browser signs them out, and a new tab starts signed out. Everyone
+      // else keeps the normal "stay signed in" behavior.
+      const isStaff = await isStaffEmail(trimmedEmail);
+      await setPersistence(auth, isStaff ? browserSessionPersistence : browserLocalPersistence);
+      markSignInStarted();
       const cred = await signInWithEmailAndPassword(auth, trimmedEmail, password);
       await clearLoginAttempts(trimmedEmail);
       await routeAfterSignIn(cred.user.uid);
@@ -110,6 +122,7 @@ export default function Login() {
     }, 90000);
 
     try {
+      markSignInStarted();
       const cred = await signInWithPopup(auth, googleProvider);
       clearTimeout(safetyTimer);
       await ensureUserProfile(cred.user.uid, {
@@ -154,12 +167,7 @@ export default function Login() {
           </label>
           <label>
             Password
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-            />
+            <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} />
           </label>
           {error && <p className="form-error">{error}</p>}
           <p className="auth-forgot-link">

@@ -10,6 +10,9 @@ import {
   getUnreadFor,
   subscribeUnread,
   useUnread,
+  initAttention,
+  noteThread,
+  forgetThread,
 } from "../lib/chatPresence";
 import { playChime, unlockAudio, setMuted, useMuted } from "../lib/chime";
 
@@ -72,7 +75,7 @@ export default function ChatNotifier() {
   useEffect(() => {
     if (!uid || !profile) return;
     seen.current = new Map();
-    let firstSnapshot = true;
+    initAttention(uid); // load which chats this browser has already read
 
     // One listener on orders and one on inquiries (pre-order questions).
     // Thread keys: the order id, or "inq_" + customer uid for inquiries.
@@ -82,10 +85,22 @@ export default function ChatNotifier() {
         q,
         (snap) => {
           snap.docChanges().forEach((ch) => {
-            if (ch.type === "removed") return;
-            const d = ch.doc.data({ serverTimestamps: "estimate" });
             const key = keyOf(ch.doc);
+            if (ch.type === "removed") {
+              forgetThread(key);
+              return;
+            }
+            const d = ch.doc.data({ serverTimestamps: "estimate" });
             const ms = d.lastMessageAt?.toMillis?.() || 0;
+            // Red dots: runs on EVERY snapshot, including the first one at
+            // sign-in, so messages that arrived while nobody was looking
+            // still show which order or inquiry they are on.
+            noteThread(
+              key,
+              ms,
+              d.lastMessageBy !== uid &&
+                (isManager ? d.lastMessageRole === "customer" : d.lastMessageRole === "manager")
+            );
             const prev = seen.current.get(key) || 0;
             seen.current.set(key, ms);
 

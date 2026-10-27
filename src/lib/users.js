@@ -3,6 +3,7 @@ import {
   doc,
   getDoc,
   setDoc,
+  updateDoc,
   collection,
   query,
   where,
@@ -30,6 +31,15 @@ export async function createUserProfile(uid, { fullName, email, phone }) {
     email,
     phone: phone ?? "",
     createdAt: serverTimestamp(),
+  });
+}
+
+// Lets a customer edit their own name and phone (My Profile page). Role and
+// email are never touched here; the rules also stop anyone changing their role.
+export async function updateUserProfile(uid, { fullName, phone }) {
+  await updateDoc(doc(db, COLLECTION, uid), {
+    fullName,
+    phone: phone ?? "",
   });
 }
 

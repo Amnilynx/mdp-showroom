@@ -2,7 +2,7 @@ import { Link, useNavigate, useLocation } from "react-router-dom";
 import { signOut } from "firebase/auth";
 import { auth } from "../lib/firebase";
 import { useAuth } from "../context/AuthContext";
-import { useUnreadInquiries } from "../lib/chatPresence";
+import { useUnreadInquiries, useOrdersAttention, useInquiriesAttention } from "../lib/chatPresence";
 
 const LOGO_URL = "https://raw.githubusercontent.com/Amnilynx/mdp-showroom-media/main/branding/mdp-logo.png";
 
@@ -21,6 +21,9 @@ const NAV_ITEMS = [
 export default function AdminLayout({ title, children }) {
   const { profile } = useAuth();
   const inquiriesUnread = useUnreadInquiries();
+  // Red dots: something on that tab needs a look (a message nobody has opened yet).
+  const ordersNeedLook = useOrdersAttention();
+  const inquiriesNeedLook = useInquiriesAttention();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -63,7 +66,13 @@ export default function AdminLayout({ title, children }) {
                     (item.to === "/admin/inquiries" && inquiriesUnread > 0 ? " admin-nav-alert" : "")
                   }
                 >
-                  <span className="admin-nav-icon">{item.icon}</span>
+                  <span className="admin-nav-icon">
+                    {item.icon}
+                    {((item.to === "/admin/orders" && ordersNeedLook) ||
+                      (item.to === "/admin/inquiries" && inquiriesNeedLook)) && (
+                      <i className="nav-dot" role="img" aria-label="New message" />
+                    )}
+                  </span>
                   <span className="admin-nav-label">{item.label}</span>
                   {item.to === "/admin/inquiries" && inquiriesUnread > 0 && (
                     <span className="tab-unread-badge">{inquiriesUnread} NEW</span>

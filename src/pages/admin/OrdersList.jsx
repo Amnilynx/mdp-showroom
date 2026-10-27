@@ -7,8 +7,18 @@ import {
   TERMINAL_STATUSES,
   STATUS_LABELS,
 } from "../../lib/orders";
+import { useThreadAttention } from "../../lib/chatPresence";
 
 const ALL_STATUSES = [...ORDER_STATUSES, ...TERMINAL_STATUSES];
+
+// Blinking red dot on the left of an order row while that order has a
+// customer message nobody has opened yet. Clears when its Messages tab is
+// opened, or when the owners reply.
+function MessageDot({ orderId }) {
+  const needsLook = useThreadAttention(orderId);
+  if (!needsLook) return null;
+  return <i className="row-dot" role="img" aria-label="New message on this order" title="New message" />;
+}
 
 export default function AdminOrdersList() {
   const [orders, setOrders] = useState([]);
@@ -120,6 +130,7 @@ export default function AdminOrdersList() {
             key={order.id}
             onClick={() => navigate(`/admin/orders/${order.id}`)}
           >
+            <MessageDot orderId={order.id} />
             <span>
               <strong>{order.configurations?.[0]?.furnitureName || "Order"}</strong>
               <br />
