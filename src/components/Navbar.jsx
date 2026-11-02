@@ -4,7 +4,8 @@ import { auth } from "../lib/firebase";
 import { useAuth } from "../context/AuthContext";
 import { useCart } from "../context/CartContext";
 
-const LOGO_URL = "https://raw.githubusercontent.com/Amnilynx/mdp-showroom-media/main/branding/mdp-logo.png";
+const LOGO_URL =
+  "https://raw.githubusercontent.com/Amnilynx/mdp-showroom-media/main/branding/mdp-logo.png";
 
 export default function Navbar() {
   const { user, profile, loading } = useAuth();
@@ -24,7 +25,11 @@ export default function Navbar() {
   return (
     <header className="navbar">
       <Link to="/" className="navbar-brand">
-        <img src={LOGO_URL} alt="MDP Modular Systems" className="navbar-logo-img" />
+        <img
+          src={LOGO_URL}
+          alt="MDP Modular Systems"
+          className="navbar-logo-img"
+        />
       </Link>
 
       <nav className="navbar-links">
@@ -77,7 +82,9 @@ export default function Navbar() {
               to={avatarTarget}
               className="navbar-avatar"
               title={profile?.role === "manager" ? "Admin area" : "My profile"}
-              aria-label={profile?.role === "manager" ? "Admin area" : "My profile"}
+              aria-label={
+                profile?.role === "manager" ? "Admin area" : "My profile"
+              }
               style={{ textDecoration: "none" }}
             >
               {(profile?.fullName || user.email || "?").charAt(0).toUpperCase()}
