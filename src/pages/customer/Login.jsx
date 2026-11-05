@@ -21,6 +21,10 @@ import { isStaffEmail } from "../../lib/staffEmails";
 import { markSignInStarted } from "../../context/AuthContext";
 import PasswordInput from "../../components/PasswordInput";
 
+// TEMPORARY: set to true to bring back the admin OTP step. While false,
+// a manager signs in with email + password only and goes straight to /admin.
+const OTP_ENABLED = false;
+
 export default function Login() {
   const navigate = useNavigate();
   const { markOtpVerified } = useAuth();
@@ -40,13 +44,13 @@ export default function Login() {
   // to branch post-auth rather than before.
   async function routeAfterSignIn(uid) {
     const profile = await getUserProfile(uid);
-    if (profile?.role === "manager") {
+    if (profile?.role === "manager" && OTP_ENABLED) {
       sessionStorage.removeItem("otpVerified");
       sessionStorage.removeItem("otpVerifiedUid");
       navigate("/verify-otp");
     } else {
       markOtpVerified(uid);
-      navigate("/");
+      navigate(profile?.role === "manager" ? "/admin" : "/");
     }
   }
 
