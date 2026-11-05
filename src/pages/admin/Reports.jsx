@@ -15,6 +15,9 @@ import {
   TERMINAL_STATUSES,
   STATUS_LABELS,
 } from "../../lib/orders";
+import { getReceipts } from "../../lib/receipts";
+import { buildEarningsReport, ordersNeedingReceipts } from "../../lib/earningsReport";
+import { exportEarningsPdf, exportEarningsXlsx } from "../../lib/earningsExport";
 
 const ALL_STATUSES = [...ORDER_STATUSES, ...TERMINAL_STATUSES];
 
@@ -27,6 +30,13 @@ export default function AdminReports() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  // Export controls. Empty dates = all time.
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [exporting, setExporting] = useState("");
+  const [exportError, setExportError] = useState("");
+  const rangeInvalid = Boolean(from && to && from > to);
 
   useEffect(() => {
     let cancelled = false;
@@ -45,6 +55,31 @@ export default function AdminReports() {
       cancelled = true;
     };
   }, []);
+
+  // Reads refund receipts only for orders that ever had money verified,
+  // then builds the figures and hands them to the PDF / Excel writer.
+  async function handleExport(kind) {
+    if (rangeInvalid || exporting) return;
+    setExporting(kind);
+    setExportError("");
+    try {
+      const needed = ordersNeedingReceipts(orders, from, to);
+      const receiptsByOrder = {};
+      await Promise.all(
+        needed.map(async (o) => {
+          receiptsByOrder[o.id] = await getReceipts(o.id);
+        })
+      );
+      const report = buildEarningsReport(orders, receiptsByOrder, { from, to });
+      if (kind === "pdf") exportEarningsPdf(report);
+      else await exportEarningsXlsx(report);
+    } catch (err) {
+      console.error(err);
+      setExportError("Couldn't create the export. Please try again.");
+    } finally {
+      setExporting("");
+    }
+  }
 
   // Monthly volume — last 6 months including the current one, oldest first.
   const monthlyVolume = useMemo(() => {
@@ -90,6 +125,55 @@ export default function AdminReports() {
 
       {loading && <p>Loading…</p>}
       {error && <p className="form-error">{error}</p>}
+
+      <div className="ticket-card export-card">
+        <div className="export-head">
+          <div>
+            <p className="section-eyebrow-dark">EXPORT</p>
+            <h3>Orders &amp; earnings summary</h3>
+            <p className="export-help">
+              Totals per status and earnings month by month: confirmed value,
+              money received and still to collect. Filtered by the date the
+              order was created. Leave the dates empty for all time.
+            </p>
+          </div>
+        </div>
+        <div className="export-controls">
+          <label className="export-field">
+            <span>From</span>
+            <input type="date" value={from} max={to || undefined} onChange={(e) => setFrom(e.target.value)} />
+          </label>
+          <label className="export-field">
+            <span>To</span>
+            <input type="date" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} />
+          </label>
+          {(from || to) && (
+            <button type="button" className="export-clear" onClick={() => { setFrom(""); setTo(""); }}>
+              Clear dates
+            </button>
+          )}
+        </div>
+        {rangeInvalid && <p className="form-error">“From” must be on or before “To”.</p>}
+        {exportError && <p className="form-error">{exportError}</p>}
+        <div className="export-actions">
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={loading || rangeInvalid || Boolean(exporting)}
+            onClick={() => handleExport("pdf")}
+          >
+            {exporting === "pdf" ? "Preparing PDF…" : "Export PDF"}
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={loading || rangeInvalid || Boolean(exporting)}
+            onClick={() => handleExport("xlsx")}
+          >
+            {exporting === "xlsx" ? "Preparing Excel…" : "Export Excel (.xlsx)"}
+          </button>
+        </div>
+      </div>
 
       <div className="reports-grid">
         <div className="ticket-card reports-chart-card">

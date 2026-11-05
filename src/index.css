@@ -6150,3 +6150,320 @@ section {
     width: 100%;
   }
 }
+
+
+/* ===== Quote request form + itemized breakdown (Nov revisions) ===== */
+
+/* ---------- Form sections ---------- */
+.qf-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 6px;
+}
+.qf-section + .qf-section {
+  border-top: 1px solid var(--cream-dark);
+  padding-top: 18px;
+  margin-top: 4px;
+}
+.quote-right .qf-section-title {
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--gold);
+  margin: 0;
+}
+.qf-section-help {
+  font-size: 12px;
+  margin: -6px 0 0;
+}
+.qf-required-note {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0;
+}
+.qf-required-note .qf-req,
+.qf-req {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.qf-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+/* ---------- One field ---------- */
+.qf-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.quote-right .qf-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-dark);
+}
+.qf-opt {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+.qf-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.qf-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  font-weight: 600;
+  color: var(--danger);
+}
+.quote-right .qf-input {
+  width: 100%;
+}
+.quote-right .qf-input:focus {
+  outline: 2px solid var(--gold-light);
+  outline-offset: 0;
+  border-color: var(--gold);
+}
+.quote-right .qf-input-invalid,
+.quote-right .qf-input-invalid:focus {
+  border-color: var(--danger);
+  background: #fff7f6;
+  outline-color: rgba(192, 57, 43, 0.35);
+}
+.quote-right .qf-input-valid {
+  border-color: var(--success);
+}
+
+.qf-consent {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.qf-consent-invalid .checkbox-label {
+  color: var(--danger);
+}
+
+/* ---------- Banner above the submit button ---------- */
+.qf-banner {
+  border-radius: 6px;
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.qf-banner strong {
+  display: block;
+  margin-bottom: 2px;
+}
+.qf-banner ul {
+  margin: 4px 0 0 18px;
+  padding: 0;
+}
+.qf-banner-error {
+  background: #fdecea;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+}
+.qf-banner-success {
+  background: #eef6ec;
+  border: 1px solid var(--success);
+  color: var(--success);
+  font-weight: 600;
+}
+
+/* ---------- Items + itemized breakdown (left column) ---------- */
+.qf-items-error {
+  margin-bottom: 12px;
+}
+.qf-item {
+  background: var(--white);
+  border: 1px solid var(--cream-dark);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 12px;
+}
+.qf-item-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.qf-item-head strong {
+  font-size: 14px;
+  display: block;
+}
+.qf-item-meta {
+  font-size: 12px;
+  margin-top: 2px;
+}
+.qf-lines {
+  margin-top: 12px;
+  border-top: 1px dashed var(--cream-dark);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.qf-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--text-dark);
+}
+.qf-line span:last-child {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.qf-line-included span:last-child {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+.qf-line-subtotal {
+  border-top: 1px solid var(--cream-dark);
+  margin-top: 4px;
+  padding-top: 8px;
+  font-weight: 700;
+}
+.qf-custom-note {
+  font-size: 12px;
+  margin-top: 8px;
+  padding: 6px 10px;
+  background: var(--cream);
+  border-radius: 4px;
+}
+
+.qf-summary-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: #b5b0a8;
+  margin-bottom: 12px;
+}
+.qf-summary-note {
+  font-size: 12px;
+  color: #d5d0c8;
+  margin-top: 12px;
+  line-height: 1.5;
+}
+
+@media (max-width: 520px) {
+  .qf-grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---------- Customer ticket: itemized price table ---------- */
+.ticket-price-table .tp-item-row td {
+  padding-top: 14px;
+  font-weight: 700;
+  text-align: left;
+}
+.ticket-price-table .tp-line-row td {
+  padding: 3px 0 3px 14px;
+  font-size: 12px;
+  font-weight: 400;
+}
+.ticket-price-table .tp-line-row td:last-child {
+  font-weight: 600;
+}
+.ticket-price-table .tp-line-included td:last-child {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+.ticket-price-table .tp-sub-row td {
+  border-top: 1px dashed var(--cream-dark);
+  padding-top: 6px;
+  font-size: 13px;
+  font-weight: 700;
+}
+.ticket-config-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: -4px 0 10px;
+}
+.ticket-sent-banner {
+  background: #eef6ec;
+  border: 1px solid var(--success);
+  border-left-width: 4px;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  color: var(--success);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.ticket-sent-banner strong {
+  display: block;
+  font-size: 14px;
+}
+
+/* ===== Order page layout ===== */
+
+/* ---------- Order page layout ----------
+   Desktop: main column on the left (action buttons under it), and a right
+   column holding Change Requests and "How it works".
+   Phone: main, then Change Requests + How it works, then the action buttons last. */
+.ticket-layout {
+  grid-template-columns: minmax(0, 1fr) 340px;
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    "main side"
+    "bottom side";
+}
+.ticket-layout > .ticket-main { grid-area: main; min-width: 0; }
+.ticket-layout > .ticket-side { grid-area: side; min-width: 0; }
+.ticket-layout > .ticket-bottom { grid-area: bottom; min-width: 0; }
+.ticket-side .ticket-card { margin-bottom: 16px; }
+.ticket-bottom .ticket-card { margin-top: 16px; }
+
+@media (max-width: 900px) {
+  .ticket-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto;
+    grid-template-areas:
+      "main"
+      "side"
+      "bottom";
+  }
+}
+
+/* ---------- Estimated payment schedule (price card) ---------- */
+.ticket-price-table .tp-sched-head td {
+  padding-top: 16px;
+  font-weight: 700;
+  text-align: left;
+  border-top: 1px solid var(--cream-dark);
+}
+.tp-sched-note {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 10px;
+  line-height: 1.5;
+}
+
+/* ---------- "Request Change Again?" inside the newest declined request ---------- */
+.change-again-btn {
+  margin-top: 12px;
+}
+
+/* ===== Reports export ===== */
+/* Reports page: export card. Paste at the end of index.css. */
+.export-card { margin-bottom: 20px; }
+.export-help { font-size: 13px; color: var(--text-muted); margin: 4px 0 0; max-width: 560px; line-height: 1.5; }
+.export-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px; margin-top: 16px; }
+.export-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 700; color: var(--text-dark); }
+.export-field input { padding: 8px 10px; border: 1px solid var(--cream-dark); border-radius: 6px; font: inherit; font-weight: 400; }
+.export-clear { background: none; border: none; color: var(--gold); font-size: 13px; cursor: pointer; padding: 8px 4px; text-decoration: underline; }
+.export-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.export-actions .btn[disabled] { opacity: 0.6; cursor: not-allowed; }

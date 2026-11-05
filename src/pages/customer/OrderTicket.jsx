@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useParams, useNavigate, useLocation, Link } from "react-router-dom";
 import Navbar from "../../components/Navbar";
 import Footer from "../../components/Footer";
@@ -33,6 +33,7 @@ import {
   getDepositDaysLeft,
   getDepositDueMillis,
   getPayableTotal,
+  getBillingPlan,
   isPureCustom,
   depositPercentLabel,
   ORDER_STATUSES,
@@ -46,6 +47,7 @@ import {
   CHANGE_REQUEST_LABELS,
 } from "../../lib/orders";
 import { generateOrderReceipt } from "../../lib/invoicePdf";
+import { configLines, lineAmount, peso, sizeText } from "../../lib/breakdown";
 
 // Cancellation only makes sense before a deposit is paid and production
 // starts — once the order is "approved" (deposit submitted) or further
@@ -78,6 +80,7 @@ export default function OrderTicket() {
   const [submittingPayment, setSubmittingPayment] = useState(false);
 
   // Request Changes form state
+  const [sentDismissed, setSentDismissed] = useState(false); // "request sent" banner
   const [showChangeForm, setShowChangeForm] = useState(false);
   const [changeNote, setChangeNote] = useState("");
   const [submittingChange, setSubmittingChange] = useState(false);
@@ -193,6 +196,16 @@ export default function OrderTicket() {
     }
   }
 
+  // Opens the change form (which lives with the action buttons) and scrolls to it.
+  function openChangeFormAgain() {
+    setShowChangeForm(true);
+    setChangeSent(false);
+    setTimeout(() => {
+      const el = document.getElementById("change-request-form");
+      if (el && el.scrollIntoView) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 50);
+  }
+
   async function handleAcceptQuote() {
     setAcceptError("");
     setAccepting(true);
@@ -211,7 +224,7 @@ export default function OrderTicket() {
       alert("This order can no longer be cancelled — it's already past the review stage.");
       return;
     }
-    if (!window.confirm("Cancel this inquiry? This can't be undone.")) return;
+    if (!window.confirm("Cancel this request? This can't be undone.")) return;
     setActionBusy(true);
     try {
       await cancelOrder(orderId);
@@ -352,7 +365,22 @@ export default function OrderTicket() {
   const canCancel = CANCELLABLE_STATUSES.includes(order.status);
   const isPostProduction = POST_PRODUCTION_STATUSES.includes(order.status);
   const payableTotal = getPayableTotal(order);
+  // Full payment schedule (downpayment / progress / final 10%) shown from the
+  // start as an estimate; once MDP issues the final price the Billing card
+  // takes over, so it is not repeated here.
+  const showEstimateSchedule = !isTerminal && !order.finalPrice;
+  const billingPlan = getBillingPlan(order);
+  const scheduleAmount = (n) => (isPureCustom(order) ? "After MDP quotes" : peso(n));
+  // Older estimates could include a separate hardware & installation fee; new ones never do.
+  const itemsSubtotal = (order.configurations || []).reduce((sum, c) => sum + (c.subtotal || 0), 0);
+  const legacyExtraFee = isPureCustom(order) ? 0 : (order.provisionalTotal || 0) - itemsSubtotal;
   const changeRequests = (order.changeRequests || []).slice().reverse();
+  // The newest change request, if it was declined: gets a "Request Change Again?" button.
+  const latestChangeRequest = changeRequests[0];
+  const canRequestAgain =
+    !isTerminal &&
+    !!latestChangeRequest &&
+    (latestChangeRequest.status === "rejected" || latestChangeRequest.status === "declined_by_admin");
   const pendingOrQuotedCount = (order.changeRequests || []).filter(
     (cr) => cr.status === "pending" || cr.status === "quoted"
   ).length;
@@ -409,6 +437,17 @@ export default function OrderTicket() {
         ) : (
         <div className="ticket-layout">
           <div className="ticket-main">
+            {location.state?.justSubmitted && !sentDismissed && (
+              <div className="ticket-sent-banner" role="status">
+                <strong>Request sent ✓</strong>
+                MDP has received your quote request. We will review it, confirm your site visit,
+                and send the final price here and in Messages. You won't be asked to pay until you
+                have the final price and accept it.{" "}
+                <button type="button" className="btn-link" onClick={() => setSentDismissed(true)}>
+                  Dismiss
+                </button>
+              </div>
+            )}
             <div className="ticket-header-row">
               <div>
                 <h1>{displayCode}</h1>
@@ -428,7 +467,7 @@ export default function OrderTicket() {
             {/* Status tracker */}
             {isTerminal ? (
               <p className={`status-terminal status-${order.status}`}>
-                This inquiry was {STATUS_LABELS[order.status].toLowerCase()}.
+                This request was {STATUS_LABELS[order.status].toLowerCase()}.
               </p>
             ) : (
               <div className="ticket-tracker">
@@ -505,20 +544,27 @@ export default function OrderTicket() {
               </div>
             )}
             <div className="ticket-card" style={isPureCustom(order) ? { display: "none" } : undefined}>
-              <h4>Selected Configurations</h4>
+              <h4>Items in Your Request</h4>
               {order.configurations.map((c, i) => (
-                <div className="ticket-config-row" key={i}>
-                  <span>
-                    {c.furnitureName} — {c.shapeType} · {c.finish}
-                  </span>
-                  <span>₱{c.subtotal.toLocaleString()}</span>
+                <div key={i}>
+                  <div className="ticket-config-row">
+                    <span>
+                      <strong>{c.furnitureName} — {c.shapeType}</strong>
+                    </span>
+                  </div>
+                  <p className="ticket-config-meta">
+                    {[c.finish, c.hardware, sizeText(c.dimensions)].filter(Boolean).join(" · ")}
+                    {c.customRequest?.part
+                      ? ` · Custom request (${c.customRequest.part}): ${c.customRequest.note || "no details"}`
+                      : ""}
+                  </p>
                 </div>
               ))}
             </div>
 
-            {/* Pricing details */}
+            {/* Price breakdown: what each item costs and why */}
             <div className="ticket-card">
-              <h4>Customization Details &amp; Estimated Price</h4>
+              <h4>Price Breakdown</h4>
               {!order.finalPrice && !isPureCustom(order) && (
                 <p className="price-pending-note">
                   This is a system estimate. Our team will review your
@@ -528,35 +574,41 @@ export default function OrderTicket() {
               <table className="ticket-price-table">
                 <tbody>
                   {order.configurations.map((c, i) => (
-                    <tr key={i}>
-                      <td>
-                        {c.furnitureName} — {c.shapeType} · {c.finish}
-                      </td>
-                      <td>₱{c.subtotal.toLocaleString()}</td>
-                    </tr>
+                    <Fragment key={i}>
+                      <tr className="tp-item-row">
+                        <td colSpan={2}>{c.furnitureName} — {c.shapeType}</td>
+                      </tr>
+                      {configLines(c).map((l) => (
+                        <tr
+                          key={l.key}
+                          className={"tp-line-row" + (l.key !== "base" && l.amount === 0 ? " tp-line-included" : "")}
+                        >
+                          <td>{l.label}</td>
+                          <td>{lineAmount(l)}</td>
+                        </tr>
+                      ))}
+                      <tr className="tp-sub-row">
+                        <td>Item subtotal</td>
+                        <td>{peso(c.subtotal)}</td>
+                      </tr>
+                    </Fragment>
                   ))}
-                  {!isPureCustom(order) && (
-                  <tr>
-                    <td>Hardware &amp; installation</td>
-                    <td>
-                      ₱
-                      {(
-                        order.provisionalTotal -
-                        order.configurations.reduce((s, c) => s + c.subtotal, 0)
-                      ).toLocaleString()}
-                    </td>
-                  </tr>
+                  {legacyExtraFee > 0 && (
+                    <tr>
+                      <td>Hardware &amp; installation</td>
+                      <td>{peso(legacyExtraFee)}</td>
+                    </tr>
                   )}
                   <tr className="ticket-price-total-row">
                     <td>
                       {order.finalPrice
-                        ? "Confirmed Total"
-                        : "Provisional Total (estimate)"}
+                        ? "Confirmed total"
+                        : "Estimated total (to be confirmed)"}
                     </td>
                     <td>
                       {isPureCustom(order) && !order.finalPrice
                         ? "To be quoted by MDP"
-                        : "₱" + (order.finalPrice ?? order.provisionalTotal).toLocaleString()}
+                        : peso(order.finalPrice ?? order.provisionalTotal)}
                     </td>
                   </tr>
                   {order.adjustmentsTotal ? (
@@ -574,16 +626,42 @@ export default function OrderTicket() {
                       </tr>
                     </>
                   ) : null}
-                  <tr className="ticket-price-deposit-row">
-                    <td>
-                      {order.depositConfirmed
-                        ? `${depositPercentLabel(order)} deposit (paid ✓)`
-                        : `${depositPercentLabel(order)} deposit ${order.finalPrice ? "to approve" : "(pending confirmation)"}`}
-                    </td>
-                    <td>₱{depositAmount.toLocaleString()}</td>
-                  </tr>
+                  {showEstimateSchedule ? (
+                    <>
+                      <tr className="tp-sched-head">
+                        <td colSpan={2}>How you pay (estimate)</td>
+                      </tr>
+                      <tr className="tp-line-row">
+                        <td>Downpayment ({billingPlan.depositPercent}%) · to start</td>
+                        <td>{scheduleAmount(billingPlan.deposit)}</td>
+                      </tr>
+                      <tr className="tp-line-row">
+                        <td>Progress billing ({billingPlan.progressPercent}%) · as the work moves forward</td>
+                        <td>{scheduleAmount(billingPlan.progressPool)}</td>
+                      </tr>
+                      <tr className="tp-line-row">
+                        <td>Final payment ({billingPlan.finalPercent}%) · at turnover</td>
+                        <td>{scheduleAmount(billingPlan.finalAmount)}</td>
+                      </tr>
+                    </>
+                  ) : (
+                    <tr className="ticket-price-deposit-row">
+                      <td>
+                        {order.depositConfirmed
+                          ? `${depositPercentLabel(order)} deposit (paid ✓)`
+                          : `${depositPercentLabel(order)} deposit ${order.finalPrice ? "to approve" : "(pending confirmation)"}`}
+                      </td>
+                      <td>₱{depositAmount.toLocaleString()}</td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
+              {showEstimateSchedule && (
+                <p className="tp-sched-note">
+                  Based on the estimated total. The amounts update when MDP confirms the final
+                  price, and each part is billed by MDP when it is due.
+                </p>
+              )}
             </div>
 
             {/* Site visit / delivery schedule — only shown once admin has
@@ -664,7 +742,123 @@ export default function OrderTicket() {
               </div>
             )}
             {acceptError && <p className="form-error">{acceptError}</p>}
+          </div>
 
+          {/* Right column on desktop: change requests, then how it works.
+              On a phone it follows the main column. */}
+          <div className="ticket-side">
+            {/* Change request tracker — history of every request on this
+                order, each with its own pending/quoted/resolved state. */}
+            {changeRequests.length > 0 && (
+              <div className="ticket-card change-request-tracker">
+                <h4>Change Requests</h4>
+                {changeRequests.map((cr) => (
+                  <div key={cr.id} className={`change-request-item change-request-item-${cr.status}`}>
+                    <div className="change-request-item-header">
+                      <span className={`change-request-status-pill change-request-status-${cr.status}`}>
+                        {CHANGE_REQUEST_LABELS[cr.status]}
+                      </span>
+                      {cr.type === "post_production" && (
+                        <span className="change-request-type-tag">Post-production</span>
+                      )}
+                      <span className="change-request-date">
+                        {new Date(cr.createdAt).toLocaleDateString("en-PH", { month: "short", day: "numeric" })}
+                      </span>
+                    </div>
+                    <p className="change-request-note">{cr.note}</p>
+                    <ChangeRequestFiles
+                      orderId={orderId}
+                      cr={cr}
+                      role="customer"
+                      user={user}
+                      userName={profile?.fullName || user.email || "Customer"}
+                      canUpload={cr.status === "pending" || cr.status === "quoted"}
+                    />
+
+                    {cr.status === "quoted" && (
+                      <div className="change-request-quote-box">
+                        <p className="change-request-quote-amount">
+                          {cr.adjustmentAmount > 0 ? "Additional cost: +" : "Credit: −"}₱
+                          {Math.abs(cr.adjustmentAmount).toLocaleString()}
+                        </p>
+                        {cr.adminResponse && <p className="change-request-admin-response">{cr.adminResponse}</p>}
+                        <div className="change-request-quote-actions">
+                          <button
+                            className="btn btn-approve"
+                            onClick={() => handleAcceptChange(cr.id)}
+                            disabled={resolvingId === cr.id}
+                          >
+                            Accept
+                          </button>
+                          <button
+                            className="btn btn-secondary"
+                            onClick={() => handleRejectChange(cr.id)}
+                            disabled={resolvingId === cr.id}
+                          >
+                            Decline — keep current order
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {cr.status === "accepted" && (
+                      <p className="change-request-resolved-note">
+                        ✓ Accepted — {cr.adjustmentAmount > 0 ? "+" : "−"}₱
+                        {Math.abs(cr.adjustmentAmount).toLocaleString()} applied to your order total.
+                      </p>
+                    )}
+                    {cr.status === "rejected" && (
+                      <p className="change-request-resolved-note">You declined this change. Your order was unaffected.</p>
+                    )}
+                    {cr.status === "declined_by_admin" && cr.adminResponse && (
+                      <p className="change-request-resolved-note change-request-resolved-note-declined">
+                        {cr.adminResponse}
+                      </p>
+                    )}
+                    {canRequestAgain && cr.id === latestChangeRequest.id && (
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-small change-again-btn"
+                        onClick={openChangeFormAgain}
+                        disabled={actionBusy}
+                      >
+                        Request Change Again?
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+          {/* How it works sidebar */}
+          <div className="ticket-sidebar">
+            <h4>How it works:</h4>
+            <div className="how-it-works-step">
+              <span className="how-it-works-num">1</span>
+              <div>
+                <strong>Accept &amp; pay</strong>
+                <p>Accept the quotation, then pay the deposit by bank deposit within {DEPOSIT_WINDOW_DAYS} days.</p>
+              </div>
+            </div>
+            <div className="how-it-works-step">
+              <span className="how-it-works-num">2</span>
+              <div>
+                <strong>In Production</strong>
+                <p>We craft your modular pieces.</p>
+              </div>
+            </div>
+            <div className="how-it-works-step">
+              <span className="how-it-works-num">3</span>
+              <div>
+                <strong>Ready for Delivery</strong>
+                <p>We schedule installation, then turn over. The last 10% is paid at turnover.</p>
+              </div>
+            </div>
+          </div>
+          </div>
+
+          {/* Actions: under the main column on desktop, the very last thing on a phone. */}
+          <div className="ticket-bottom">
             {!isTerminal && (
               <div className="ticket-actions">
                 {/* Once our team has verified the deposit there is nothing
@@ -716,7 +910,7 @@ export default function OrderTicket() {
                     onClick={handleCancel}
                     disabled={actionBusy}
                   >
-                    Cancel Inquiry
+                    Cancel Request
                   </button>
                 )}
               </div>
@@ -731,7 +925,7 @@ export default function OrderTicket() {
             )}
 
             {showChangeForm && (
-              <div className="ticket-card change-request-form">
+              <div className="ticket-card change-request-form" id="change-request-form">
                 <h4>Request a Change</h4>
                 {isPostProduction ? (
                   <p className="change-request-hint change-request-hint-warning">
@@ -849,105 +1043,6 @@ export default function OrderTicket() {
                 Your request was sent to our team.
               </p>
             )}
-
-            {/* Change request tracker — history of every request on this
-                order, each with its own pending/quoted/resolved state. */}
-            {changeRequests.length > 0 && (
-              <div className="ticket-card change-request-tracker">
-                <h4>Change Requests</h4>
-                {changeRequests.map((cr) => (
-                  <div key={cr.id} className={`change-request-item change-request-item-${cr.status}`}>
-                    <div className="change-request-item-header">
-                      <span className={`change-request-status-pill change-request-status-${cr.status}`}>
-                        {CHANGE_REQUEST_LABELS[cr.status]}
-                      </span>
-                      {cr.type === "post_production" && (
-                        <span className="change-request-type-tag">Post-production</span>
-                      )}
-                      <span className="change-request-date">
-                        {new Date(cr.createdAt).toLocaleDateString("en-PH", { month: "short", day: "numeric" })}
-                      </span>
-                    </div>
-                    <p className="change-request-note">{cr.note}</p>
-                    <ChangeRequestFiles
-                      orderId={orderId}
-                      cr={cr}
-                      role="customer"
-                      user={user}
-                      userName={profile?.fullName || user.email || "Customer"}
-                      canUpload={cr.status === "pending" || cr.status === "quoted"}
-                    />
-
-                    {cr.status === "quoted" && (
-                      <div className="change-request-quote-box">
-                        <p className="change-request-quote-amount">
-                          {cr.adjustmentAmount > 0 ? "Additional cost: +" : "Credit: −"}₱
-                          {Math.abs(cr.adjustmentAmount).toLocaleString()}
-                        </p>
-                        {cr.adminResponse && <p className="change-request-admin-response">{cr.adminResponse}</p>}
-                        <div className="change-request-quote-actions">
-                          <button
-                            className="btn btn-approve"
-                            onClick={() => handleAcceptChange(cr.id)}
-                            disabled={resolvingId === cr.id}
-                          >
-                            Accept
-                          </button>
-                          <button
-                            className="btn btn-secondary"
-                            onClick={() => handleRejectChange(cr.id)}
-                            disabled={resolvingId === cr.id}
-                          >
-                            Decline — keep current order
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {cr.status === "accepted" && (
-                      <p className="change-request-resolved-note">
-                        ✓ Accepted — {cr.adjustmentAmount > 0 ? "+" : "−"}₱
-                        {Math.abs(cr.adjustmentAmount).toLocaleString()} applied to your order total.
-                      </p>
-                    )}
-                    {cr.status === "rejected" && (
-                      <p className="change-request-resolved-note">You declined this change. Your order was unaffected.</p>
-                    )}
-                    {cr.status === "declined_by_admin" && cr.adminResponse && (
-                      <p className="change-request-resolved-note change-request-resolved-note-declined">
-                        {cr.adminResponse}
-                      </p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* How it works sidebar */}
-          <div className="ticket-sidebar">
-            <h4>How it works:</h4>
-            <div className="how-it-works-step">
-              <span className="how-it-works-num">1</span>
-              <div>
-                <strong>Accept &amp; pay</strong>
-                <p>Accept the quotation, then pay the deposit by bank deposit within {DEPOSIT_WINDOW_DAYS} days.</p>
-              </div>
-            </div>
-            <div className="how-it-works-step">
-              <span className="how-it-works-num">2</span>
-              <div>
-                <strong>In Production</strong>
-                <p>We craft your modular pieces.</p>
-              </div>
-            </div>
-            <div className="how-it-works-step">
-              <span className="how-it-works-num">3</span>
-              <div>
-                <strong>Ready for Delivery</strong>
-                <p>We schedule installation, then turn over. The last 10% is paid at turnover.</p>
-              </div>
-            </div>
           </div>
         </div>
         )}

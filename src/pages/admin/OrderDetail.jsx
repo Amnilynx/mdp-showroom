@@ -95,6 +95,8 @@ export default function AdminOrderDetail() {
   const [visitDateDraft, setVisitDateDraft] = useState("");
   const [deliveryDateDraft, setDeliveryDateDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [pendingComplete, setPendingComplete] = useState(""); // inline "complete anyway?" warning
+  const [priceMsg, setPriceMsg] = useState(null); // { type: "error" | "confirm", text }
   const [activeTab, setActiveTab] = useState(() =>
     new URLSearchParams(window.location.search).get("tab") === "messages" ? "messages" : "details"
   );
@@ -153,9 +155,9 @@ export default function AdminOrderDetail() {
     }
   }, [location.search]);
 
-  async function handleStatusUpdate() {
+  async function handleStatusUpdate(skipCompleteWarning = false) {
     try {
-      await runStatusUpdate();
+      await runStatusUpdate(skipCompleteWarning === true);
     } catch (err) {
       console.error(err);
       setBusy(false);
@@ -163,8 +165,9 @@ export default function AdminOrderDetail() {
     }
   }
 
-  async function runStatusUpdate() {
+  async function runStatusUpdate(skipCompleteWarning = false) {
     setStatusMsg(null);
+    setPendingComplete("");
     if (!order) return;
     if (statusDraft === order.status) return;
 
@@ -196,7 +199,11 @@ export default function AdminOrderDetail() {
       } else if (unpaid.length) {
         warn = `${unpaid.length} billing${unpaid.length === 1 ? " is" : "s are"} not yet verified as paid.`;
       }
-      if (warn && !window.confirm(`${warn}\n\nMark the order Completed anyway?`)) return;
+      if (warn && !skipCompleteWarning) {
+        // Shown on the page (not a pop-up) so it can't be missed or blocked.
+        setPendingComplete(warn);
+        return;
+      }
     }
 
     setBusy(true);
@@ -417,32 +424,32 @@ export default function AdminOrderDetail() {
 
   const senderName = profile?.fullName || user?.email || "MDP Modular Systems";
 
-  async function handleIssueFinalPrice() {
+  async function handleIssueFinalPrice(confirmed = false) {
+    setPriceMsg(null);
+    const fail = (text) => setPriceMsg({ type: "error", text });
     const price = Number(priceDraft);
     if (String(priceDraft).trim() === "" || !Number.isFinite(price) || price <= 0) {
-      alert("Enter the final price as a number above 0.");
-      return;
+      return fail("Enter the final price as a number above 0.");
     }
     if (price > 100000000) {
-      alert("That price looks too large. Check the number of zeros.");
-      return;
+      return fail("That price looks too large. Check the number of zeros.");
     }
-    if (!Number.isInteger(price * 100)) {
-      alert("Use at most two decimal places for the price.");
-      return;
+    if (!Number.isInteger(Math.round(price * 100 * 1000) / 1000)) {
+      return fail("Use at most two decimal places for the price.");
     }
     if (quoteFiles.length === 0) {
-      alert("Attach the quote file (PDF, Word or Excel) to send to the customer with this price.");
+      return fail("Attach the quote file (PDF, Word or Excel) to send to the customer with this price.");
+    }
+    if (confirmed !== true) {
+      setPriceMsg({
+        type: "confirm",
+        text: `Issue ₱${price.toLocaleString()} as the final price and send ${quoteFiles.length} quote file${quoteFiles.length === 1 ? "" : "s"} to the customer? They will be asked to approve and pay a ${depositPercentLabel(order)} deposit (₱${Math.round(
+          price * getDepositRate(order)
+        ).toLocaleString()}) against this amount.`,
+      });
       return;
     }
-    if (
-      !window.confirm(
-        `Issue ₱${price.toLocaleString()} as the final price and send ${quoteFiles.length} quote file${quoteFiles.length === 1 ? "" : "s"} to the customer? They will be asked to approve and pay a ${depositPercentLabel(order)} deposit (₱${Math.round(
-          price * getDepositRate(order)
-        ).toLocaleString()}) against this amount.`
-      )
-    )
-      return;
+    setPriceMsg(null);
     setBusy(true);
     try {
       // File first: if it fails, no price goes out without its quote.
@@ -456,7 +463,7 @@ export default function AdminOrderDetail() {
       setQuoteFiles([]);
       await load();
     } catch (err) {
-      alert(err?.message || "Failed to issue final price.");
+      setPriceMsg({ type: "error", text: err?.message || "Failed to issue final price." });
     } finally {
       setBusy(false);
     }
@@ -850,7 +857,7 @@ export default function AdminOrderDetail() {
               />
               <button
                 className="btn btn-primary"
-                onClick={handleIssueFinalPrice}
+                onClick={() => handleIssueFinalPrice()}
                 disabled={
                   busy ||
                   (order.status !== "request_received" &&
@@ -860,6 +867,29 @@ export default function AdminOrderDetail() {
                 {order.finalPrice ? "Re-issue" : "Issue Price"}
               </button>
             </div>
+            {order.status !== "request_received" && order.status !== "under_review" && (
+              <p className="form-error" role="status" style={{ margin: "6px 0 0" }}>
+                The price is locked because this order is already "{STATUS_LABELS[order.status] || order.status}".
+                It can only be set while the order is Request Received or Under Review.
+                To change the amount now, use a change request.
+              </p>
+            )}
+            {priceMsg && priceMsg.type === "error" && (
+              <p className="form-error" role="alert" style={{ margin: "6px 0 0" }}>
+                {priceMsg.text}
+              </p>
+            )}
+            {priceMsg && priceMsg.type === "confirm" && (
+              <div className="cancel-warning-banner" role="alert">
+                <p>{priceMsg.text}</p>
+                <button type="button" className="btn btn-primary" disabled={busy} onClick={() => handleIssueFinalPrice(true)}>
+                  Yes, issue price
+                </button>{" "}
+                <button type="button" className="btn btn-secondary" onClick={() => setPriceMsg(null)}>
+                  Cancel
+                </button>
+              </div>
+            )}
             {(order.status === "request_received" || order.status === "under_review") && (
               <QuoteFilePicker
                 label="Quote files to send with this price (PDF, Word or Excel)"
@@ -1028,25 +1058,42 @@ export default function AdminOrderDetail() {
             onVerifyDeposit={handleToggleDeposit}
           />
 
-          {/* Contact card */}
+          {/* Customer details card */}
           <div className="ticket-card">
-            <h4>Customer Contact</h4>
+            <h4>Customer Details</h4>
             <p className="contact-name">{order.contact?.name}</p>
             <p className="contact-line">{order.contact?.email}</p>
             <p className="contact-line">{order.contact?.phone}</p>
-            {order.location && <p className="contact-line">{order.location}</p>}
-            {order.siteAddress && (
-              <p className="contact-line">{order.siteAddress}</p>
+            {/* New orders keep the full address in siteAddress (location is just
+                "City, Province"); older ones had the two as separate lines. */}
+            {order.siteAddressParts ? (
+              order.siteAddress && <p className="contact-line">📍 {order.siteAddress}</p>
+            ) : (
+              <>
+                {order.location && <p className="contact-line">{order.location}</p>}
+                {order.siteAddress && <p className="contact-line">{order.siteAddress}</p>}
+              </>
+            )}
+            {order.floorPlanUrl && (
+              <p className="contact-line">
+                Floor plan / space photo:{" "}
+                <a href={order.floorPlanUrl} target="_blank" rel="noopener noreferrer" className="btn-link">
+                  Open link
+                </a>
+              </p>
+            )}
+            {order.projectDetails && !isPureCustom(order) && (
+              <p className="contact-line">Project details: {order.projectDetails}</p>
             )}
           </div>
 
           {/* Site visit */}
           <div className="ticket-card">
             <h4>Site Visit</h4>
-            {order.contact?.preferredVisitDate && (
+            {(order.contact?.preferredVisitDate || order.preferredVisitDate) && (
               <p className="deposit-note">
                 Customer's preferred date:{" "}
-                <strong>{order.contact.preferredVisitDate}</strong>
+                <strong>{order.contact?.preferredVisitDate || order.preferredVisitDate}</strong>
               </p>
             )}
             <div className="inline-form-row">
@@ -1176,13 +1223,25 @@ export default function AdminOrderDetail() {
                   ? "btn-cancel"
                   : "btn-primary")
               }
-              onClick={handleStatusUpdate}
+              onClick={() => handleStatusUpdate()}
               disabled={busy || statusDraft === order.status}
             >
               {statusDraft === "cancelled" || statusDraft === "rejected"
                 ? `⚠ ${STATUS_LABELS[statusDraft]} This Order`
                 : "Update"}
             </button>
+            {pendingComplete && (
+              <div className="cancel-warning-banner" role="alert">
+                <strong>Before you complete this order</strong>
+                <p>{pendingComplete}</p>
+                <button type="button" className="btn btn-primary" disabled={busy} onClick={() => handleStatusUpdate(true)}>
+                  Mark Completed anyway
+                </button>{" "}
+                <button type="button" className="btn btn-secondary" onClick={() => setPendingComplete("")}>
+                  Not yet
+                </button>
+              </div>
+            )}
             {statusMsg && (
               <div
                 role={statusMsg.type === "error" ? "alert" : "status"}
